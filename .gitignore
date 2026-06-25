@@ -1,0 +1,19 @@
+# Credentials — never commit the live config
+config/reports.conf.yaml
+
+# Downloaded report files
+logs/downloads/
+
+# Delivery marker files (created by scheduler checker)
+logs/.sent_*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
