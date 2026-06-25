@@ -10,38 +10,32 @@ by editing config/reports.conf.yaml only.
 
 Authentication
 --------------
-Uses cookie-based session authentication via auth.py, matching the exact
-flow the Wazuh Dashboard browser client uses:
+Cookie-based session via auth.py. One POST /auth/login call produces a
+security_authentication cookie; the session object carries it for all
+subsequent API calls.
 
-  1. POST /auth/login  →  receives security_authentication session cookie
-  2. All Reporting API calls use that session cookie (not Basic Auth)
+API flow (on-demand)
+--------------------
+A single synchronous POST generates and returns the report immediately:
 
-The report definition ID is passed in the URL path (not the request body),
-and query-string parameters (timezone, dateFormat, csvSeparator) are
-included on every generate request — both matching the observed browser
-request format.
+  POST /api/reporting/generateReport/<report_def_id>
+       ?timezone=...&dateFormat=...&csvSeparator=...&allowLeadingWildcards=true
+  Body: empty
+  → { "data": "data:<mime>;base64,<content>", "filename": "<name>" }
+
+There is no polling step. The connection blocks until generation completes
+and the full file is returned inline as a base64 data-URI.
 
 Usage
 -----
-  # Run a single report by ID
   python3 scripts/wazuh_report_runner.py --report critical_alerts_daily
-
-  # Run several reports in one pass
   python3 scripts/wazuh_report_runner.py --report critical_alerts_daily failed_logins_weekly
-
-  # Run ALL enabled, non-scheduled reports
   python3 scripts/wazuh_report_runner.py --all
-
-  # Run all enabled reports whose ID contains a keyword
   python3 scripts/wazuh_report_runner.py --all --filter compliance
-
-  # Use a non-default config path
   python3 scripts/wazuh_report_runner.py --all --config /etc/wazuh-reports/reports.conf.yaml
-
-  # Dry-run: log what would happen without calling any API or sending email
   python3 scripts/wazuh_report_runner.py --all --dry-run
 
-Environment variable overrides (take precedence over the config file):
+Environment variable overrides:
   WAZUH_DASH_PASS   Dashboard password
   WAZUH_SMTP_PASS   SMTP password
 """
@@ -51,7 +45,6 @@ import logging
 import os
 import smtplib
 import sys
-import time
 from datetime import date, datetime
 from email import encoders
 from email.mime.base import MIMEBase
@@ -63,7 +56,7 @@ import requests
 import urllib3
 import yaml
 
-from auth import build_report_params, get_dashboard_session
+from auth import generate_report, get_dashboard_session
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -98,93 +91,9 @@ def resolve_recipients(report: dict, recipient_groups: dict) -> list[str]:
     return [e for e in emails if not (e in seen or seen.add(e))]
 
 
-# ── OpenSearch Dashboards Reporting API ───────────────────────────────────────
-
-def trigger_report(session: requests.Session, dashboard_cfg: dict, report_def_id: str) -> str:
-    """
-    Trigger report generation and return the job_id.
-
-    The report definition ID is placed in the URL path (not the request body),
-    the body is empty, and query-string parameters control formatting — exactly
-    matching the browser request:
-
-      POST /api/reporting/generateReport/<report_def_id>
-           ?timezone=...&dateFormat=...&csvSeparator=...&allowLeadingWildcards=true
-      Content-Length: 0
-    """
-    base_url = dashboard_cfg["url"].rstrip("/")
-    url = f"{base_url}/api/reporting/generateReport/{report_def_id}"
-    headers = {
-        "osd-xsrf": "osd-fetch",
-        "Content-Type": "application/json",
-    }
-
-    resp = session.post(
-        url,
-        params=build_report_params(dashboard_cfg),
-        headers=headers,
-        timeout=dashboard_cfg.get("timeout_seconds", 30),
-    )
-    resp.raise_for_status()
-
-    body = resp.json()
-    job_id = body.get("job_id") or body.get("data", {}).get("_id")
-    if not job_id:
-        raise ValueError(f"No job_id in response: {resp.text}")
-    return job_id
-
-
-def wait_for_report(
-    session: requests.Session, dashboard_cfg: dict, job_id: str
-) -> bool:
-    """Poll the job status endpoint until a terminal state is reached."""
-    base_url = dashboard_cfg["url"].rstrip("/")
-    url = f"{base_url}/api/reporting/jobs/status/{job_id}"
-    interval = dashboard_cfg.get("poll_interval_seconds", 5)
-    max_attempts = dashboard_cfg.get("poll_max_attempts", 24)
-
-    for attempt in range(1, max_attempts + 1):
-        time.sleep(interval)
-        resp = session.get(url, timeout=dashboard_cfg.get("timeout_seconds", 30))
-        resp.raise_for_status()
-
-        body = resp.json()
-        status = body.get("job_status") or body.get("data", {}).get("status")
-        logging.debug(f"  Poll {attempt}/{max_attempts}: job {job_id} → {status}")
-
-        if status == "completed":
-            return True
-        if status in ("failed", "error"):
-            logging.error(f"  Job {job_id} ended with status: {status}")
-            return False
-
-    logging.error(f"  Job {job_id} did not complete after {max_attempts} polls.")
-    return False
-
-
-def download_report(
-    session: requests.Session, dashboard_cfg: dict, job_id: str, output_path: Path
-) -> None:
-    """Stream the finished report file to disk."""
-    base_url = dashboard_cfg["url"].rstrip("/")
-    url = f"{base_url}/api/reporting/jobs/download/{job_id}"
-
-    resp = session.get(
-        url,
-        timeout=dashboard_cfg.get("timeout_seconds", 30),
-        stream=True,
-    )
-    resp.raise_for_status()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=8192):
-            f.write(chunk)
-
-
 # ── Email ─────────────────────────────────────────────────────────────────────
 
 def render_template(template: str, report: dict, extra: dict | None = None) -> str:
-    """Fill date/time/report placeholders in a subject or body template."""
     now = datetime.now()
     ctx = {
         "date":         date.today().isoformat(),
@@ -204,8 +113,10 @@ def send_email(
     subject: str,
     body: str,
     attachment_path: Path,
+    attachment_name: str | None = None,
     dry_run: bool = False,
 ) -> None:
+    attach_name = attachment_name or attachment_path.name
     msg = MIMEMultipart()
     msg["From"] = f"{smtp_cfg.get('from_name', 'Wazuh Reports')} <{smtp_cfg['from_address']}>"
     msg["To"] = ", ".join(recipients)
@@ -216,7 +127,7 @@ def send_email(
         part = MIMEBase("application", "octet-stream")
         part.set_payload(f.read())
     encoders.encode_base64(part)
-    part.add_header("Content-Disposition", f'attachment; filename="{attachment_path.name}"')
+    part.add_header("Content-Disposition", f'attachment; filename="{attach_name}"')
     msg.attach(part)
 
     if dry_run:
@@ -239,10 +150,8 @@ def run_report(
     session: requests.Session,
     dry_run: bool = False,
 ) -> bool:
-    """Execute a single on-demand report: trigger → poll → download → email."""
+    """Execute a single on-demand report: POST generate → save → email."""
     rid = report["id"]
-    dashboard_cfg = cfg["dashboard"]
-    smtp_cfg = cfg["smtp"]
     output_dir = Path(cfg.get("storage", {}).get("output_dir", "logs/downloads"))
 
     logging.info(f"[{rid}] ── Starting: {report['label']}")
@@ -253,55 +162,40 @@ def run_report(
         return False
 
     now = datetime.now()
-    filename = f"{rid}_{now.strftime('%Y%m%d_%H%M%S')}.{report.get('format', 'xlsx')}"
-    output_path = output_dir / filename
+    local_filename = f"{rid}_{now.strftime('%Y%m%d_%H%M%S')}.{report.get('format', 'xlsx')}"
+    output_path = output_dir / local_filename
 
     try:
-        # 1. Trigger
         if not dry_run:
-            logging.info(f"[{rid}] Triggering report definition: {report['report_def_id']}")
-            job_id = trigger_report(session, dashboard_cfg, report["report_def_id"])
-            logging.info(f"[{rid}] Job ID: {job_id}")
+            logging.info(f"[{rid}] Generating: {report['report_def_id']}")
+            api_filename = generate_report(
+                session, cfg["dashboard"], report["report_def_id"], output_path
+            )
+            logging.info(f"[{rid}] ✓ Saved → {output_path}  ({api_filename})")
         else:
-            job_id = "dry-run-job-000"
-            logging.info(f"[{rid}] [DRY-RUN] Skipping API trigger.")
-
-        # 2. Poll
-        if not dry_run:
-            logging.info(f"[{rid}] Waiting for job to complete...")
-            if not wait_for_report(session, dashboard_cfg, job_id):
-                logging.error(f"[{rid}] Report generation failed — aborting.")
-                return False
-
-        # 3. Download
-        if not dry_run:
-            logging.info(f"[{rid}] Downloading → {output_path}")
-            download_report(session, dashboard_cfg, job_id, output_path)
-        else:
+            api_filename = f"{rid}_dry-run.xlsx"
             output_path = Path("/tmp/dry-run-placeholder.xlsx")
             output_path.touch()
+            logging.info(f"[{rid}] [DRY-RUN] Skipping API call.")
 
-        # 4. Email
         subject = render_template(
             report.get("email_subject", "Wazuh Report: {report_label} — {date}"), report
         )
         body = render_template(
-            report.get(
-                "email_body",
-                "Wazuh report '{report_label}' attached.\n\nGenerated: {timestamp}\n",
-            ),
+            report.get("email_body",
+                "Wazuh report '{report_label}' attached.\n\nGenerated: {timestamp}\n"),
             report,
         )
         logging.info(f"[{rid}] Sending to {len(recipients)} recipient(s)...")
-        send_email(smtp_cfg, recipients, subject, body, output_path, dry_run=dry_run)
+        send_email(cfg["smtp"], recipients, subject, body, output_path,
+                   attachment_name=api_filename, dry_run=dry_run)
 
         logging.info(f"[{rid}] ✓ Done.")
         return True
 
     except requests.HTTPError as exc:
-        logging.error(
-            f"[{rid}] HTTP error: {exc} — {exc.response.text if exc.response else 'N/A'}"
-        )
+        logging.error(f"[{rid}] HTTP {exc.response.status_code if exc.response else '?'}: "
+                      f"{exc.response.text[:200] if exc.response else exc}")
     except Exception as exc:
         logging.error(f"[{rid}] Unexpected error: {exc}", exc_info=True)
     return False
@@ -315,20 +209,12 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument(
-        "--config", default=str(CONFIG_PATH_DEFAULT), metavar="PATH",
-        help="Path to reports.conf.yaml (default: config/reports.conf.yaml)",
-    )
-    parser.add_argument("--report", nargs="+", metavar="ID",
-                        help="Run one or more specific report IDs")
-    parser.add_argument("--all", action="store_true",
-                        help="Run all enabled, non-scheduled reports")
-    parser.add_argument("--filter", metavar="KEYWORD",
-                        help="Limit --all to report IDs containing KEYWORD")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Simulate without API calls or emails")
-    parser.add_argument("--verbose", action="store_true",
-                        help="Enable DEBUG logging")
+    parser.add_argument("--config", default=str(CONFIG_PATH_DEFAULT), metavar="PATH")
+    parser.add_argument("--report", nargs="+", metavar="ID")
+    parser.add_argument("--all", action="store_true")
+    parser.add_argument("--filter", metavar="KEYWORD")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -339,24 +225,18 @@ def main() -> None:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else getattr(logging, log_cfg.get("level", "INFO")),
         format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(log_file),
-        ],
+        handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler(log_file)],
     )
 
-    # Only on-demand (non-scheduled), enabled reports
-    eligible = [
-        r for r in cfg.get("reports", [])
-        if r.get("enabled", True) and not r.get("scheduled", False)
-    ]
+    eligible = [r for r in cfg.get("reports", [])
+                if r.get("enabled", True) and not r.get("scheduled", False)]
 
     if args.report:
         wanted = set(args.report)
         targets = [r for r in eligible if r["id"] in wanted]
         missing = wanted - {r["id"] for r in targets}
         if missing:
-            logging.warning(f"Report ID(s) not found or not eligible for on-demand: {missing}")
+            logging.warning(f"Report ID(s) not found or not on-demand eligible: {missing}")
     elif args.all:
         targets = eligible
         if args.filter:
@@ -367,29 +247,19 @@ def main() -> None:
         sys.exit(0)
 
     if not targets:
-        logging.error("No matching reports found. Check --report IDs or --filter value.")
+        logging.error("No matching reports found.")
         sys.exit(1)
 
-    # Authenticate once; reuse the session for all reports in this run
-    if not args.dry_run:
-        logging.info("Establishing Dashboard session...")
-        session = get_dashboard_session(cfg["dashboard"])
-    else:
-        session = requests.Session()  # unused in dry-run but keeps signature consistent
+    session = get_dashboard_session(cfg["dashboard"]) if not args.dry_run else requests.Session()
 
-    results: dict[str, bool] = {}
-    for report in targets:
-        results[report["id"]] = run_report(report, cfg, session, dry_run=args.dry_run)
+    results = {r["id"]: run_report(r, cfg, session, dry_run=args.dry_run) for r in targets}
 
-    ok   = [rid for rid, success in results.items() if success]
-    fail = [rid for rid, success in results.items() if not success]
+    ok   = [rid for rid, ok in results.items() if ok]
+    fail = [rid for rid, ok in results.items() if not ok]
     logging.info(f"\n{'=' * 60}")
     logging.info(f"Run complete — {len(ok)} succeeded, {len(fail)} failed")
-    for rid in ok:
-        logging.info(f"  ✓ {rid}")
-    for rid in fail:
-        logging.error(f"  ✗ {rid}")
-
+    for rid in ok:   logging.info(f"  ✓ {rid}")
+    for rid in fail: logging.error(f"  ✗ {rid}")
     sys.exit(0 if not fail else 1)
 
 

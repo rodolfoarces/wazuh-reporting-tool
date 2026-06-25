@@ -23,9 +23,10 @@ dashboard:
   username: "admin"
   password: "Sup3rS3cret!"            # Override with WAZUH_DASH_PASS env var
   verify_ssl: false                   # Set true in production with a valid cert
-  timeout_seconds: 30
-  poll_interval_seconds: 5
-  poll_max_attempts: 24               # 24 × 5 s = 2 min max wait per report
+  # The Reporting API is fully synchronous — one POST returns the finished
+  # file immediately. There is no job queue or polling step.
+  # Increase timeout_seconds for large reports or slow servers.
+  timeout_seconds: 60
 
   # Report generation query-string parameters.
   # These are sent on every POST /api/reporting/generateReport/<id> request,
@@ -104,7 +105,12 @@ recipient_groups:
 #                         wazuh_scheduler_checker.py handles these,
 #                         wazuh_report_runner.py ignores them
 #   schedule_label        Human-readable schedule description (logs + email)
-#   check_window_minutes  How far back to look for a completed scheduler job;
+#   report_name_match     Exact Report Definition name as shown in Wazuh Dashboard
+#                         Reporting → Report Definitions. Used to match instances
+#                         in the job queue (GET /api/reporting/reports).
+#   check_window_minutes  How far back (minutes) to search the job queue for a
+#                         completed scheduled instance. Set to at least 15 min
+#                         longer than expected generation time.
 #                         set to ~15 min longer than the expected generation time
 # -----------------------------------------------------------------------------
 reports:
@@ -191,7 +197,8 @@ reports:
     enabled: true
     scheduled: true
     schedule_label: "Daily at 06:00"
-    check_window_minutes: 90          # Look for completed jobs in the last 90 min
+    report_name_match: "Wazuh - Daily Security Overview"  # must match exactly the name in Report Definitions
+    check_window_minutes: 90           # search job queue for instances in the last 90 min
     recipients:
       - all_security
     email_subject: "Wazuh Daily Overview (Scheduled) — {date}"
@@ -211,7 +218,8 @@ reports:
     enabled: true
     scheduled: true
     schedule_label: "Every Monday at 07:00"
-    check_window_minutes: 120
+    report_name_match: "Wazuh - Weekly Threat Intelligence"  # must match exactly
+    check_window_minutes: 120          # search job queue for instances in the last 120 min
     recipients:
       - soc_managers
       - soc_team
