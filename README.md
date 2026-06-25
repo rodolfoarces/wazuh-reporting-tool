@@ -2,9 +2,10 @@
 
 Automated report delivery for **Wazuh / OpenSearch Dashboards**.
 
-Generates or validates reports, then emails them to configured recipients.
-All report definitions, schedules, and recipient lists live in one YAML config
-file — no code changes needed to add or modify reports.
+Generates or validates reports from the Wazuh Indexer Reporting API, then
+emails them to configured recipients. All report definitions, schedules, and
+recipient lists live in one YAML config file — no code changes needed to add
+or modify reports.
 
 ---
 
@@ -13,38 +14,39 @@ file — no code changes needed to add or modify reports.
 ```
 wazuh-reports/
 ├── config/
-│   └── reports.conf.example.yaml   # Template — copy to reports.conf.yaml and edit
+│   └── reports.conf.example.yaml     # Template — copy to reports.conf.yaml and edit
 ├── scripts/
-│   ├── wazuh_report_runner.py      # On-demand: trigger → poll → download → email
-│   └── wazuh_scheduler_checker.py  # Scheduled: validate Indexer job → download → email
-├── logs/                           # Runtime logs and downloaded reports (git-ignored)
+│   ├── auth.py                        # Session auth + all Reporting API calls
+│   ├── wazuh_report_runner.py         # On-demand: POST generate → save → email
+│   └── wazuh_scheduler_checker.py     # Scheduled: GET job queue → re-execute → email
+├── logs/                              # Runtime logs and report files (git-ignored)
 │   └── .gitkeep
 ├── .gitignore
 ├── requirements.txt
 └── README.md
 ```
 
-> **`config/reports.conf.yaml` is git-ignored.** Only the example file is version-controlled.
-> Credentials never touch the repository.
+> **`config/reports.conf.yaml` is git-ignored.** Only the example file is
+> version-controlled. Credentials never touch the repository.
 
 ---
 
 ## Quick start
 
 ```bash
-# 1. Clone or place the project
-cd ./wazuh-reports
+# 1. Enter the project directory
+cd ~/Projects/Wazuh/wazuh-reports
 
 # 2. Install Python dependencies
 pip3 install -r requirements.txt
 
-# 3. Create your config from the example
+# 3. Create your live config from the example
 cp config/reports.conf.example.yaml config/reports.conf.yaml
 
-# 4. Edit with your real values (see Configuration section below)
+# 4. Edit with your real values (dashboard URL, credentials, report IDs)
 nano config/reports.conf.yaml
 
-# 5. Verify without sending anything
+# 5. Verify everything without sending anything
 python3 scripts/wazuh_report_runner.py --all --dry-run
 python3 scripts/wazuh_scheduler_checker.py --all --dry-run
 
@@ -52,18 +54,147 @@ python3 scripts/wazuh_scheduler_checker.py --all --dry-run
 python3 scripts/wazuh_report_runner.py --report critical_alerts_daily
 ```
 
+> **After any `git pull`:** diff the example against your live config to
+> catch new required fields or changed placeholder names before running:
+> ```bash
+> diff config/reports.conf.example.yaml config/reports.conf.yaml
+> ```
+
 ---
 
-## Finding your Report Definition IDs
+## How the Reporting API works
+
+Understanding the three API operations helps configure reports correctly.
+
+### Operation 1 — Generate on-demand (POST)
+
+Triggers a new report and returns the file immediately in the same response.
+The connection blocks until generation is complete — there is no polling step.
+
+```
+POST /api/reporting/generateReport/<report_def_id>
+     ?timezone=America/Asuncion&dateFormat=...&csvSeparator=,&allowLeadingWildcards=true
+Body: empty
+→ 200 OK
+  {
+    "data": "data:application/vnd.openxmlformats...;base64,<content>",
+    "filename": "Wazuh - Agent list_2026-06-25T19:15:44.524Z_439ca4c0.xlsx"
+  }
+```
+
+The `report_def_id` is taken from the Report Definition edit URL in the Dashboard.
+
+### Operation 2 — List the job queue (GET)
+
+Returns all report instances ever generated (both on-demand and scheduled).
+Each entry contains the original report parameters and the time it was created.
+
+```
+GET /api/reporting/reports
+→ 200 OK
+  { "data": [
+      {
+        "_id": "A4xaAJ8BYNS2laJ4HcnD",
+        "_source": {
+          "time_created": 1782330933698,
+          "report_definition": {
+            "report_params": {
+              "report_name": "Wazuh - Agent list",   ← used by report_name_match
+              ...
+            },
+            "trigger": {
+              "trigger_type": "On demand"             ← or "Schedule"
+            }
+          }
+        }
+      },
+      ...
+  ]}
+```
+
+> **Important:** `_source.report_definition.report_params.report_name` is the
+> value that `report_name_match` in your config must match exactly. It is the
+> **Report Definition name as entered in the Dashboard UI**, not the `id` or
+> `label` fields in your config file.
+
+### Operation 3 — Re-execute a queued instance (GET)
+
+Re-runs the report using the saved parameters (time range, saved search,
+format) of an existing job queue entry and returns a fresh file.
+
+```
+GET /api/reporting/generateReport/<instance_id>
+    ?timezone=...&dateFormat=...&csvSeparator=,&allowLeadingWildcards=true
+→ 200 OK
+  { "data": "...;base64,<content>", "filename": "..._<new_timestamp>_<new_uuid>.xlsx" }
+```
+
+> **Note:** The API does not serve stored files. Every GET re-executes the
+> query and returns a freshly generated file — confirmed by fresh timestamps
+> and new UUIDs in the filename on every call. The job queue is a list of
+> **report parameter snapshots**, not stored file artifacts.
+
+---
+
+## Finding your Report Definition ID (`report_def_id`)
+
+Used by the on-demand runner (POST generation).
 
 1. Open **Wazuh Dashboard → Reporting → Report Definitions**
-2. Click **Edit** on any report
+2. Click **Edit** on the report
 3. Copy the ID from the browser URL:
 
 ```
 https://wazuh.corp.example.com/app/reporting/edit/report_definition/a1b2c3d4-e5f6-7890-abcd-ef1234567890
                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                                                                      paste this into report_def_id
+                                                                      this is your report_def_id
+```
+
+---
+
+## Finding your Report Name Match (`report_name_match`)
+
+Used by the scheduler checker to locate the right entry in the job queue.
+This **must match exactly** the `report_name` field stored in the job queue,
+which corresponds to the **Report Definition name as entered in the Dashboard UI**.
+
+### Method 1 — Check the Dashboard UI
+
+1. Open **Wazuh Dashboard → Reporting → Report Definitions**
+2. The **Name** column value is exactly what goes in `report_name_match`
+
+### Method 2 — Query the job queue directly
+
+Run this one-liner to list all report names and their trigger types:
+
+```bash
+curl -sk -X GET "https://10.0.0.3/api/reporting/reports" \
+  -H "osd-xsrf: osd-fetch" \
+  -H "Content-Type: application/json" \
+  --cookie "security_authentication=<your_cookie>" \
+  | python3 -c "
+import json, sys
+data = json.load(sys.stdin).get('data', [])
+for r in data:
+    src = r['_source']
+    rp  = src.get('report_definition', {}).get('report_params', {})
+    trg = src.get('report_definition', {}).get('trigger', {})
+    print(f\"_id          : {r['_id']}\")
+    print(f\"  report_name  : {rp.get('report_name')}\")
+    print(f\"  trigger_type : {trg.get('trigger_type')}\")
+    print(f\"  time_created : {src.get('time_created')}\")
+    print()
+"
+```
+
+The value under `report_name` for your scheduled report is exactly what goes
+in `report_name_match`. For example:
+
+```
+_id          : KoyUAJ8BYNS2laJ49cmD
+  report_name  : Wazuh - FIM Daily Overview     ← use this exact string
+  trigger_type : Schedule
+  time_created : 1782330933698
 ```
 
 ---
@@ -76,11 +207,12 @@ https://wazuh.corp.example.com/app/reporting/edit/report_definition/a1b2c3d4-e5f
 dashboard:
   url: "https://wazuh.corp.example.com:443"
   username: "admin"
-  password: "Sup3rS3cret!"    # or use WAZUH_DASH_PASS env var
+  password: "Sup3rS3cret!"    # or set WAZUH_DASH_PASS env var
   verify_ssl: false            # set true with a valid certificate
-  timeout_seconds: 30
-  poll_interval_seconds: 5
-  poll_max_attempts: 24        # 24 × 5 s = 2 min max wait
+  timeout_seconds: 60          # generation is synchronous — allow enough time
+  timezone: "America/Asuncion" # IANA tz name, e.g. America/New_York, UTC
+  date_format: "MMM D, YYYY @ HH:mm:ss.SSS"
+  csv_separator: ","
 ```
 
 ### SMTP
@@ -91,67 +223,43 @@ smtp:
   port: 587
   use_tls: true
   username: "wazuh-reports@corp.example.com"
-  password: "Sm7pP@ssw0rd"    # or use WAZUH_SMTP_PASS env var
+  password: "Sm7pP@ssw0rd"    # or set WAZUH_SMTP_PASS env var
   from_address: "wazuh-reports@corp.example.com"
   from_name: "Wazuh Report System"
 ```
 
-**Gmail example:**
-```yaml
-smtp:
-  host: "smtp.gmail.com"
-  port: 587
-  use_tls: true
-  username: "wazuh-alerts@gmail.com"
-  password: "abcd efgh ijkl mnop"    # 16-char App Password (not your login password)
-  from_address: "wazuh-alerts@gmail.com"
-```
-
-**Office 365 example:**
-```yaml
-smtp:
-  host: "smtp.office365.com"
-  port: 587
-  use_tls: true
-  username: "wazuh-reports@corp.onmicrosoft.com"
-  password: "M!cr0s0ftP@ss"
-  from_address: "wazuh-reports@corp.onmicrosoft.com"
-```
+**Gmail:** use an [App Password](https://support.google.com/accounts/answer/185833) (16 chars), host `smtp.gmail.com`, port `587`.  
+**Office 365:** host `smtp.office365.com`, port `587`.
 
 ### Recipient groups
 
-Define named groups once, reference them in any number of reports:
-
 ```yaml
 recipient_groups:
-
   soc_team:
     - "alice.smith@corp.example.com"
     - "bob.jones@corp.example.com"
-
   soc_managers:
-    - "carol.white@corp.example.com"   # SOC Manager
-    - "david.lee@corp.example.com"     # CISO
-
-  compliance:
-    - "compliance@corp.example.com"
-    - "external-auditor@auditfirm.example.com"
+    - "carol.white@corp.example.com"
+    - "david.lee@corp.example.com"
 ```
 
 ### On-demand report definition
+
+Handled by `wazuh_report_runner.py`. The runner ignores entries with
+`scheduled: true`.
 
 ```yaml
 reports:
   - id: "critical_alerts_daily"
     label: "Critical Alerts — Daily Summary"
-    report_def_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-    format: "xlsx"
+    report_def_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"  # from Report Definition edit URL
+    format: "xlsx"                # xlsx or csv
     enabled: true
     recipients:
-      - soc_team                            # group name
-      - soc_managers                        # group name
-      - "extra-recipient@partner.example.com"  # raw address also works
-    email_subject: "Wazuh Critical Alerts — {date}"
+      - soc_team                  # recipient group name
+      - soc_managers
+      - "extra@partner.example.com"  # raw address also accepted
+    email_subject: "🚨 Wazuh Critical Alerts — {date}"
     email_body: |
       Daily Critical Alerts report attached.
 
@@ -161,35 +269,72 @@ reports:
       — Wazuh Report System
 ```
 
-**Available placeholders:** `{date}` `{timestamp}` `{month}` `{year}` `{report_label}`
+**On-demand email placeholders:**
+
+| Placeholder | Value |
+|---|---|
+| `{date}` | Today's date, e.g. `2026-06-25` |
+| `{timestamp}` | Generation datetime, e.g. `2026-06-25 19:15:44` |
+| `{month}` | Month name, e.g. `June` |
+| `{year}` | Year, e.g. `2026` |
+| `{report_label}` | The `label` field from this config entry |
 
 ### Scheduled report definition
 
-Add `scheduled: true` plus two extra fields. The checker script handles these;
-the runner script ignores them.
+Handled by `wazuh_scheduler_checker.py`. The checker ignores entries without
+`scheduled: true`. Requires two additional fields not present on on-demand
+reports: `report_name_match` and `check_window_minutes`.
 
 ```yaml
-  - id: "scheduled_daily_overview"
-    label: "Scheduled — Daily Security Overview"
-    report_def_id: "e5f6a7b8-c9d0-1234-efab-345678901234"
+  - id: "scheduled_fim_daily_overview"
+    label: "Scheduled — Daily FIM Security Overview"
+    report_def_id: "KoyUAJ8BYNS2laJ49cmD"   # from Report Definition edit URL
+                                              # (used if checker falls back to generation)
     format: "xlsx"
     enabled: true
     scheduled: true
-    schedule_label: "Daily at 06:00"
-    check_window_minutes: 90      # look back 90 min from when the checker runs
-    recipients:
-      - all_security
-    email_subject: "Wazuh Daily Overview (Scheduled) — {date}"
-    email_body: |
-      Scheduled Daily Security Overview attached.
+    schedule_label: "Daily at 18:00"
 
-      Completed : {completed_at}
-      Job ID    : {job_id}
+    # report_name_match — REQUIRED for scheduled reports
+    # Must match _source.report_definition.report_params.report_name in the job queue,
+    # which is the exact Report Definition name entered in the Dashboard UI.
+    # To find it: Wazuh Dashboard → Reporting → Report Definitions → Name column
+    # Or query the job queue — see README "Finding your Report Name Match" section.
+    report_name_match: "Wazuh - FIM Daily Overview"
+
+    # check_window_minutes — how far back to search the job queue for a completed
+    # scheduled instance. Set to at least 15 min longer than expected generation time.
+    # Example: scheduled at 18:00, checker cron runs at 18:15 → window of 30 min is enough.
+    check_window_minutes: 90
+
+    recipients:
+      - soc_team
+    email_subject: "Wazuh FIM Daily Overview (Scheduled) — {date}"
+    email_body: |
+      Scheduled Daily FIM Security Overview attached.
+
+      Schedule     : {schedule_label}
+      Generated at : {generated_at}
+      Instance ID  : {instance_id}
 
       — Wazuh Report System
 ```
 
-**Additional placeholders for scheduled reports:** `{completed_at}` `{job_id}` `{schedule_label}`
+**Scheduled email placeholders:**
+
+| Placeholder | Value |
+|---|---|
+| `{date}` | Today's date |
+| `{timestamp}` | Current datetime when checker ran |
+| `{generated_at}` | When the matched job queue instance was created |
+| `{instance_id}` | The job queue `_id` of the matched instance |
+| `{month}` | Month name |
+| `{year}` | Year |
+| `{report_label}` | The `label` field from this config entry |
+| `{schedule_label}` | The `schedule_label` field from this config entry |
+
+> **Common mistake:** using `{completed_at}` or `{job_id}` in the email body —
+> these are not valid placeholders. Use `{generated_at}` and `{instance_id}`.
 
 ---
 
@@ -197,8 +342,8 @@ the runner script ignores them.
 
 ### `wazuh_report_runner.py` — on-demand
 
-Triggers a report job via the API, waits for it to finish, downloads it,
-and emails it to the configured recipients.
+POSTs to the generate endpoint, receives the file inline (synchronous), saves
+it, and emails it. One API call per report.
 
 ```bash
 # Single report
@@ -220,46 +365,58 @@ python3 scripts/wazuh_report_runner.py --all --dry-run
 python3 scripts/wazuh_report_runner.py --report critical_alerts_daily --verbose
 ```
 
-### `wazuh_scheduler_checker.py` — scheduled report validation
+### `wazuh_scheduler_checker.py` — scheduled report delivery
 
-Does **not** trigger generation. Queries the Dashboards job list for a recently
-completed job matching the configured `report_def_id`, then downloads and emails
-it. If no job is found within the window, it sends a **missing-report alert**
-to the same recipients.
-
-Idempotent — a marker file prevents the same job being emailed twice even if
-the checker runs multiple times.
+Queries the job queue once, then for each scheduled report finds the most
+recent matching instance within the configured window and re-executes it to
+download and email the file.
 
 ```bash
 # Check all scheduled reports
 python3 scripts/wazuh_scheduler_checker.py --all
 
-# Check one specific scheduled report
-python3 scripts/wazuh_scheduler_checker.py --report scheduled_daily_overview
+# Check a specific scheduled report
+python3 scripts/wazuh_scheduler_checker.py --report scheduled_fim_daily_overview
 
-# Dry-run
+# Re-send even if already delivered today
+python3 scripts/wazuh_scheduler_checker.py --report scheduled_fim_daily_overview --force
+
+# Dry-run (no API calls, no email)
 python3 scripts/wazuh_scheduler_checker.py --all --dry-run
+
+# Verbose debug output
+python3 scripts/wazuh_scheduler_checker.py --all --verbose
 ```
 
-#### How it decides whether a report is "found"
+#### How the checker works
 
 ```
 OpenSearch Dashboards Scheduler
-  └─ generates job at scheduled time (e.g. 06:00)
+  └─ runs Report Definition at scheduled time (e.g. 18:00)
+  └─ writes instance to job queue (_id + original parameters)
         │
-        │  ~15 minutes later
+        │  ~15 minutes later (cron)
         ▼
 wazuh_scheduler_checker.py
-  1. GET /api/reporting/jobs/list
-  2. Filter: report_def_id matches AND status = "completed"
-             AND completed_at >= (now - check_window_minutes)
-  3a. Job found + not yet sent
-        → download → email → write marker file (.sent_<id>_<job_id>)
-  3b. Job found + marker exists
-        → skip (already delivered)
-  3c. No job found
-        → send ⚠ missing-report alert email to recipients
+  1. GET /api/reporting/reports  →  fetch full job queue (one call for all reports)
+  2. For each scheduled report in config:
+       Filter by: report_name  == report_name_match  (exact match)
+                  trigger_type == "Schedule"
+                  time_created >= now - check_window_minutes
+
+       ┌── Instance found? ────────────────────────────────────────────┐
+       │  YES → marker file exists? (.sent_<id>_<instance_id>)         │
+       │         NO  → GET /api/reporting/generateReport/<instance_id> │
+       │               → decode base64 → save → email → write marker   │
+       │         YES → skip (already delivered) — use --force to resend│
+       │                                                                │
+       │  NO  → send ⚠ not-found alert email to recipients             │
+       └────────────────────────────────────────────────────────────────┘
 ```
+
+> **Startup validation:** the checker will refuse to run if any enabled
+> scheduled report in config is missing `report_name_match`. This prevents
+> silent failures where the wrong report (or no report) gets matched.
 
 ---
 
@@ -288,47 +445,57 @@ crontab -e
             >> logs/cron.log 2>&1
 
 # ── Scheduled report validation ───────────────────────────────────────────────
-# Run ~15 min after the Indexer's own scheduled generation time.
+# Run ~15 min AFTER the time configured in the Wazuh Dashboard scheduler.
 
-# Daily overview — Indexer runs at 06:00, check at 06:15
-15 6 * * *  cd ~/Projects/Wazuh/wazuh-reports && \
-            python3 scripts/wazuh_scheduler_checker.py --report scheduled_daily_overview \
+# FIM daily overview — Dashboard scheduler runs at 18:00, checker at 18:15
+15 18 * * * cd ~/Projects/Wazuh/wazuh-reports && \
+            python3 scripts/wazuh_scheduler_checker.py \
+            --report scheduled_fim_daily_overview \
             >> logs/cron.log 2>&1
 
-# Weekly threat — Indexer runs Monday 07:00, check at 07:15
-15 7 * * 1  cd ~/Projects/Wazuh/wazuh-reports && \
-            python3 scripts/wazuh_scheduler_checker.py --report scheduled_weekly_threat \
+# Daily security overview — Dashboard scheduler at 06:00, checker at 06:15
+15 6 * * *  cd ~/Projects/Wazuh/wazuh-reports && \
+            python3 scripts/wazuh_scheduler_checker.py \
+            --report scheduled_daily_overview \
             >> logs/cron.log 2>&1
 ```
+
+---
+
+## Adding a new on-demand report — checklist
+
+1. **Create** the Report Definition in Wazuh Dashboard → Reporting → Report Definitions
+2. **Copy** the `report_def_id` from the edit URL
+3. **Add** an entry under `reports:` in `config/reports.conf.yaml` with `scheduled: false` (or omit the field)
+4. **Reference** an existing recipient group or add a new one
+5. **Test** with `--dry-run`, then run for real
+6. **Add** a cron entry if it should run on a schedule
+
+## Adding a new scheduled report — checklist
+
+1. **Create** the Report Definition in Wazuh Dashboard → Reporting → Report Definitions, with a **Schedule** trigger
+2. **Copy** the `report_def_id` from the edit URL
+3. **Find** the `report_name_match` value using one of the methods in the [Finding your Report Name Match](#finding-your-report-name-match-report_name_match) section
+4. **Add** an entry under `reports:` with `scheduled: true`, `report_name_match`, and `check_window_minutes`
+5. **Test** with `--dry-run` after the scheduler has run at least once
+6. **Add** a cron entry timed ~15 min after the Dashboard scheduler runs
 
 ---
 
 ## Using environment variables instead of plaintext passwords
 
 ```bash
-# Add to ~/.bashrc, /etc/environment, or a secrets manager integration
+# Add to ~/.bashrc or /etc/environment
 export WAZUH_DASH_PASS="Sup3rS3cret!"
 export WAZUH_SMTP_PASS="Sm7pP@ssw0rd"
 ```
 
-Or inline in cron (less ideal, visible in process list):
+Or prefix the cron command directly (less ideal — visible in process list):
 
 ```cron
-15 6 * * * WAZUH_DASH_PASS=secret WAZUH_SMTP_PASS=secret \
-           python3 ~/Projects/Wazuh/wazuh-reports/scripts/wazuh_scheduler_checker.py --all
+15 18 * * * WAZUH_DASH_PASS=secret WAZUH_SMTP_PASS=secret \
+            python3 ~/Projects/Wazuh/wazuh-reports/scripts/wazuh_scheduler_checker.py --all
 ```
-
----
-
-## Adding a new report — checklist
-
-1. **Create the Report Definition** in Wazuh Dashboard → Reporting → Report Definitions
-2. **Copy the ID** from the edit URL
-3. **Add an entry** to `config/reports.conf.yaml` under `reports:`
-4. **Reference or create** a recipient group (or use raw email addresses)
-5. **Test** with `--dry-run`, then run for real
-
-No script changes required.
 
 ---
 
@@ -336,10 +503,13 @@ No script changes required.
 
 | Symptom | Check |
 |---|---|
-| `No job_id in response` | Verify `report_def_id` matches the Dashboards edit URL |
-| HTTP 401 errors | Wrong credentials; check `WAZUH_DASH_PASS` env var override |
-| SSL warnings in logs | Expected with self-signed certs when `verify_ssl: false`; suppress by setting `true` with a valid cert |
-| Email fails to send | Confirm SMTP host, port, credentials; check firewall allows port 587 outbound |
-| Scheduled report `not_found` every run | Increase `check_window_minutes`; verify the Dashboards scheduler is enabled; check the Dashboards job queue manually |
-| Same report emailed twice | Marker files (`.sent_*`) in `logs/downloads/` prevent duplicates — check directory permissions |
-| `Unknown recipient entry` warning | Entry in `recipients:` doesn't match any key in `recipient_groups:` and isn't an email address |
+| `missing 'report_name_match'` error on startup | Add `report_name_match` to every `scheduled: true` entry in config — see [Finding your Report Name Match](#finding-your-report-name-match-report_name_match) |
+| `report_name_match` configured but no instance found | Value must match `_source.report_definition.report_params.report_name` exactly — use the job queue curl command to verify the exact string |
+| `KeyError` on `{completed_at}` or `{job_id}` in email body | Wrong placeholders — use `{generated_at}` and `{instance_id}` for scheduled reports |
+| HTTP 401 on any API call | Wrong credentials; check `WAZUH_DASH_PASS` env var; session cookie may have expired |
+| `security_authentication cookie was not set` | Login endpoint returned 200 but no cookie — check Dashboard URL and that the `/auth/login` endpoint is reachable |
+| SSL warnings in logs | Expected with self-signed certs when `verify_ssl: false` — set `true` with a valid cert in production |
+| Email fails to send | Verify SMTP host, port, credentials; check that port 587 outbound is allowed by firewall |
+| `check_window_minutes` too short — no instance found | Increase the window; also confirm the Dashboard scheduler actually ran (check Dashboard → Reporting → Reports) |
+| Same report emailed twice | Marker files (`.sent_<id>_<instance_id>`) in `logs/downloads/` prevent duplicates — verify write permissions on that directory |
+| `Unknown recipient entry` warning | Entry in `recipients:` doesn't match any key in `recipient_groups:` and isn't a valid email address |

@@ -6,6 +6,14 @@
 #   cp config/reports.conf.example.yaml config/reports.conf.yaml
 #   Edit config/reports.conf.yaml with your real values.
 #
+# KEEPING YOUR LIVE CONFIG UP TO DATE:
+#   This example file is the source of truth for field names, valid
+#   placeholders, and new required fields. When the example is updated
+#   (e.g. after a git pull), diff it against your live config to catch
+#   any new required fields or changed placeholder names:
+#
+#   diff config/reports.conf.example.yaml config/reports.conf.yaml
+#
 # NOTE:
 #   reports.conf.yaml is listed in .gitignore and will never be committed.
 #   Only this example file (with placeholder values) lives in version control.
@@ -13,6 +21,14 @@
 # CREDENTIAL OVERRIDES (take precedence over values in this file):
 #   export WAZUH_DASH_PASS="your-dashboard-password"
 #   export WAZUH_SMTP_PASS="your-smtp-password"
+#
+# PLACEHOLDER REFERENCE (do not mix up on-demand vs scheduled):
+#   On-demand  : {date} {timestamp} {month} {year} {report_label}
+#   Scheduled  : {date} {timestamp} {month} {year} {report_label}
+#                {schedule_label} {generated_at} {instance_id}
+#   INVALID (will cause KeyError):
+#                {completed_at}  →  use {generated_at} instead
+#                {job_id}        →  use {instance_id} instead
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -96,22 +112,38 @@ recipient_groups:
 #   enabled               false = skip without deleting the entry
 #   recipients            List of group names (from recipient_groups) and/or
 #                         raw email addresses
-#   email_subject         Optional subject override; supports placeholders:
-#                           {date} {timestamp} {month} {year} {report_label}
-#   email_body            Optional body override; same placeholders available
+#   email_subject         Optional subject override; supports placeholders.
+#                         On-demand: {date} {timestamp} {month} {year} {report_label}
+#   email_body            Optional body override; same placeholders available.
 #
 # Additional fields for scheduled reports (scheduled: true):
 #   scheduled             true = managed by the OpenSearch Dashboards scheduler;
 #                         wazuh_scheduler_checker.py handles these,
 #                         wazuh_report_runner.py ignores them
-#   schedule_label        Human-readable schedule description (logs + email)
-#   report_name_match     Exact Report Definition name as shown in Wazuh Dashboard
-#                         Reporting → Report Definitions. Used to match instances
-#                         in the job queue (GET /api/reporting/reports).
+#   schedule_label        Human-readable schedule description (used in logs + email)
+#
+#   report_name_match     REQUIRED for scheduled reports.
+#                         Must match _source.report_definition.report_params.report_name
+#                         in the job queue — i.e. the Report Definition name as entered
+#                         in the Wazuh Dashboard UI.
+#                         To find it:
+#                           Option A: Dashboard → Reporting → Report Definitions → Name column
+#                           Option B: curl GET /api/reporting/reports and read report_name
+#                         NOTE: this is NOT the id or label field in this config file.
+#
 #   check_window_minutes  How far back (minutes) to search the job queue for a
-#                         completed scheduled instance. Set to at least 15 min
-#                         longer than expected generation time.
-#                         set to ~15 min longer than the expected generation time
+#                         completed scheduled instance.
+#                         Rule of thumb: (cron offset from schedule) + 15 min buffer.
+#                         Example: scheduled at 18:00, cron at 18:15 → 30 min is enough.
+#
+# Scheduled report email placeholders (different from on-demand):
+#   {date}           Today's date
+#   {timestamp}      Datetime when the checker ran
+#   {generated_at}   When the matched job queue instance was created  ← use this, not {completed_at}
+#   {instance_id}    The job queue _id of the matched instance         ← use this, not {job_id}
+#   {schedule_label} The schedule_label field from this entry
+#   {report_label}   The label field from this entry
+#   {month} {year}   Month name and year
 # -----------------------------------------------------------------------------
 reports:
 
@@ -186,9 +218,11 @@ reports:
 
   # ── Scheduled reports ──────────────────────────────────────────────────────
   # These are NOT triggered by wazuh_report_runner.py.
-  # The OpenSearch Dashboards Report Scheduler generates them automatically.
-  # wazuh_scheduler_checker.py polls for completion, then downloads and emails.
-  # Run the checker ~15 min after each scheduled generation time.
+  # The OpenSearch Dashboards Report Scheduler runs them automatically.
+  # wazuh_scheduler_checker.py queries the job queue, finds the matching
+  # instance, re-executes it via GET, and emails the result.
+  # Run the checker ~15 min after each scheduled generation time via cron.
+  # REQUIRED field: report_name_match — see field docs above.
 
   - id: "scheduled_daily_overview"
     label: "Scheduled — Daily Security Overview"
@@ -205,9 +239,10 @@ reports:
     email_body: |
       This is the automatically scheduled Daily Security Overview.
 
-      Report date: {date}
-      Schedule   : Daily at 06:00
-      Completed  : {completed_at}
+      Report date  : {date}
+      Schedule     : {schedule_label}
+      Generated at : {generated_at}
+      Instance ID  : {instance_id}
 
       — Wazuh Report System
 
@@ -227,9 +262,39 @@ reports:
     email_body: |
       Attached is the scheduled Weekly Threat Intelligence report.
 
-      Report date: {date}
-      Schedule   : Every Monday at 07:00
-      Completed  : {completed_at}
+      Report date  : {date}
+      Schedule     : {schedule_label}
+      Generated at : {generated_at}
+      Instance ID  : {instance_id}
+
+      — Wazuh Report System
+
+  - id: "scheduled_fim_daily_overview"
+    label: "Scheduled — Daily FIM Security Overview"
+    report_def_id: "KoyUAJ8BYNS2laJ49cmD"   # from Report Definition edit URL
+    format: "xlsx"
+    enabled: true
+    scheduled: true
+    schedule_label: "Daily at 18:00"
+
+    # report_name_match: the exact name entered in the Dashboard Report Definition.
+    # To verify: Dashboard → Reporting → Report Definitions → Name column
+    # OR run: curl GET /api/reporting/reports and check report_name in the response.
+    report_name_match: "Wazuh - FIM Daily Overview"
+
+    # Scheduled at 18:00, checker cron runs at 18:15 → 30 min window is enough.
+    # Use 90 if the report takes a long time to generate.
+    check_window_minutes: 90
+
+    recipients:
+      - soc_team
+    email_subject: "Wazuh FIM Daily Overview (Scheduled) — {date}"
+    email_body: |
+      Scheduled Daily FIM Security Overview attached.
+
+      Schedule     : {schedule_label}
+      Generated at : {generated_at}
+      Instance ID  : {instance_id}
 
       — Wazuh Report System
 
