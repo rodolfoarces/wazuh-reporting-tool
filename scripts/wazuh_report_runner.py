@@ -8,6 +8,19 @@ Reads all configuration (connection, SMTP, recipients, report definitions)
 from the YAML config file. No report logic lives here — add or change reports
 by editing config/reports.conf.yaml only.
 
+Authentication
+--------------
+Uses cookie-based session authentication via auth.py, matching the exact
+flow the Wazuh Dashboard browser client uses:
+
+  1. POST /auth/login  →  receives security_authentication session cookie
+  2. All Reporting API calls use that session cookie (not Basic Auth)
+
+The report definition ID is passed in the URL path (not the request body),
+and query-string parameters (timezone, dateFormat, csvSeparator) are
+included on every generate request — both matching the observed browser
+request format.
+
 Usage
 -----
   # Run a single report by ID
@@ -50,9 +63,10 @@ import requests
 import urllib3
 import yaml
 
+from auth import build_report_params, get_dashboard_session
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Default config path: <project_root>/config/reports.conf.yaml
 CONFIG_PATH_DEFAULT = Path(__file__).resolve().parent.parent / "config" / "reports.conf.yaml"
 
 
@@ -77,25 +91,42 @@ def resolve_recipients(report: dict, recipient_groups: dict) -> list[str]:
         elif "@" in entry:
             emails.append(entry)
         else:
-            logging.warning(f"Unknown recipient entry '{entry}' in report '{report['id']}' — skipping.")
+            logging.warning(
+                f"Unknown recipient entry '{entry}' in report '{report['id']}' — skipping."
+            )
     seen: set = set()
     return [e for e in emails if not (e in seen or seen.add(e))]
 
 
 # ── OpenSearch Dashboards Reporting API ───────────────────────────────────────
 
-def trigger_report(dashboard_cfg: dict, report_def_id: str) -> str:
-    """POST to generate a report job; returns the job_id string."""
-    url = f"{dashboard_cfg['url']}/api/reporting/generateReport"
-    resp = requests.post(
+def trigger_report(session: requests.Session, dashboard_cfg: dict, report_def_id: str) -> str:
+    """
+    Trigger report generation and return the job_id.
+
+    The report definition ID is placed in the URL path (not the request body),
+    the body is empty, and query-string parameters control formatting — exactly
+    matching the browser request:
+
+      POST /api/reporting/generateReport/<report_def_id>
+           ?timezone=...&dateFormat=...&csvSeparator=...&allowLeadingWildcards=true
+      Content-Length: 0
+    """
+    base_url = dashboard_cfg["url"].rstrip("/")
+    url = f"{base_url}/api/reporting/generateReport/{report_def_id}"
+    headers = {
+        "osd-xsrf": "osd-fetch",
+        "Content-Type": "application/json",
+    }
+
+    resp = session.post(
         url,
-        json={"report_definition_id": report_def_id},
-        auth=(dashboard_cfg["username"], dashboard_cfg["password"]),
-        headers={"osd-xsrf": "true"},
-        verify=dashboard_cfg.get("verify_ssl", False),
+        params=build_report_params(dashboard_cfg),
+        headers=headers,
         timeout=dashboard_cfg.get("timeout_seconds", 30),
     )
     resp.raise_for_status()
+
     body = resp.json()
     job_id = body.get("job_id") or body.get("data", {}).get("_id")
     if not job_id:
@@ -103,21 +134,20 @@ def trigger_report(dashboard_cfg: dict, report_def_id: str) -> str:
     return job_id
 
 
-def wait_for_report(dashboard_cfg: dict, job_id: str) -> bool:
-    """Poll until the report job reaches a terminal state. Returns True on success."""
-    url = f"{dashboard_cfg['url']}/api/reporting/jobs/status/{job_id}"
+def wait_for_report(
+    session: requests.Session, dashboard_cfg: dict, job_id: str
+) -> bool:
+    """Poll the job status endpoint until a terminal state is reached."""
+    base_url = dashboard_cfg["url"].rstrip("/")
+    url = f"{base_url}/api/reporting/jobs/status/{job_id}"
     interval = dashboard_cfg.get("poll_interval_seconds", 5)
     max_attempts = dashboard_cfg.get("poll_max_attempts", 24)
 
     for attempt in range(1, max_attempts + 1):
         time.sleep(interval)
-        resp = requests.get(
-            url,
-            auth=(dashboard_cfg["username"], dashboard_cfg["password"]),
-            verify=dashboard_cfg.get("verify_ssl", False),
-            timeout=dashboard_cfg.get("timeout_seconds", 30),
-        )
+        resp = session.get(url, timeout=dashboard_cfg.get("timeout_seconds", 30))
         resp.raise_for_status()
+
         body = resp.json()
         status = body.get("job_status") or body.get("data", {}).get("status")
         logging.debug(f"  Poll {attempt}/{max_attempts}: job {job_id} → {status}")
@@ -132,13 +162,15 @@ def wait_for_report(dashboard_cfg: dict, job_id: str) -> bool:
     return False
 
 
-def download_report(dashboard_cfg: dict, job_id: str, output_path: Path) -> None:
-    """Stream the finished report to disk."""
-    url = f"{dashboard_cfg['url']}/api/reporting/jobs/download/{job_id}"
-    resp = requests.get(
+def download_report(
+    session: requests.Session, dashboard_cfg: dict, job_id: str, output_path: Path
+) -> None:
+    """Stream the finished report file to disk."""
+    base_url = dashboard_cfg["url"].rstrip("/")
+    url = f"{base_url}/api/reporting/jobs/download/{job_id}"
+
+    resp = session.get(
         url,
-        auth=(dashboard_cfg["username"], dashboard_cfg["password"]),
-        verify=dashboard_cfg.get("verify_ssl", False),
         timeout=dashboard_cfg.get("timeout_seconds", 30),
         stream=True,
     )
@@ -155,10 +187,10 @@ def render_template(template: str, report: dict, extra: dict | None = None) -> s
     """Fill date/time/report placeholders in a subject or body template."""
     now = datetime.now()
     ctx = {
-        "date": date.today().isoformat(),
-        "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "month": now.strftime("%B"),
-        "year": now.year,
+        "date":         date.today().isoformat(),
+        "timestamp":    now.strftime("%Y-%m-%d %H:%M:%S"),
+        "month":        now.strftime("%B"),
+        "year":         now.year,
         "report_label": report.get("label", report["id"]),
     }
     if extra:
@@ -201,7 +233,12 @@ def send_email(
 
 # ── Core runner ───────────────────────────────────────────────────────────────
 
-def run_report(report: dict, cfg: dict, dry_run: bool = False) -> bool:
+def run_report(
+    report: dict,
+    cfg: dict,
+    session: requests.Session,
+    dry_run: bool = False,
+) -> bool:
     """Execute a single on-demand report: trigger → poll → download → email."""
     rid = report["id"]
     dashboard_cfg = cfg["dashboard"]
@@ -223,7 +260,7 @@ def run_report(report: dict, cfg: dict, dry_run: bool = False) -> bool:
         # 1. Trigger
         if not dry_run:
             logging.info(f"[{rid}] Triggering report definition: {report['report_def_id']}")
-            job_id = trigger_report(dashboard_cfg, report["report_def_id"])
+            job_id = trigger_report(session, dashboard_cfg, report["report_def_id"])
             logging.info(f"[{rid}] Job ID: {job_id}")
         else:
             job_id = "dry-run-job-000"
@@ -232,14 +269,14 @@ def run_report(report: dict, cfg: dict, dry_run: bool = False) -> bool:
         # 2. Poll
         if not dry_run:
             logging.info(f"[{rid}] Waiting for job to complete...")
-            if not wait_for_report(dashboard_cfg, job_id):
+            if not wait_for_report(session, dashboard_cfg, job_id):
                 logging.error(f"[{rid}] Report generation failed — aborting.")
                 return False
 
         # 3. Download
         if not dry_run:
             logging.info(f"[{rid}] Downloading → {output_path}")
-            download_report(dashboard_cfg, job_id, output_path)
+            download_report(session, dashboard_cfg, job_id, output_path)
         else:
             output_path = Path("/tmp/dry-run-placeholder.xlsx")
             output_path.touch()
@@ -249,17 +286,22 @@ def run_report(report: dict, cfg: dict, dry_run: bool = False) -> bool:
             report.get("email_subject", "Wazuh Report: {report_label} — {date}"), report
         )
         body = render_template(
-            report.get("email_body", "Wazuh report '{report_label}' attached.\n\nGenerated: {timestamp}\n"),
+            report.get(
+                "email_body",
+                "Wazuh report '{report_label}' attached.\n\nGenerated: {timestamp}\n",
+            ),
             report,
         )
-        logging.info(f"[{rid}] Sending to {len(recipients)} recipient(s)…")
+        logging.info(f"[{rid}] Sending to {len(recipients)} recipient(s)...")
         send_email(smtp_cfg, recipients, subject, body, output_path, dry_run=dry_run)
 
         logging.info(f"[{rid}] ✓ Done.")
         return True
 
     except requests.HTTPError as exc:
-        logging.error(f"[{rid}] HTTP error: {exc} — {exc.response.text if exc.response else 'N/A'}")
+        logging.error(
+            f"[{rid}] HTTP error: {exc} — {exc.response.text if exc.response else 'N/A'}"
+        )
     except Exception as exc:
         logging.error(f"[{rid}] Unexpected error: {exc}", exc_info=True)
     return False
@@ -273,8 +315,10 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--config", default=str(CONFIG_PATH_DEFAULT), metavar="PATH",
-                        help="Path to reports.conf.yaml (default: config/reports.conf.yaml)")
+    parser.add_argument(
+        "--config", default=str(CONFIG_PATH_DEFAULT), metavar="PATH",
+        help="Path to reports.conf.yaml (default: config/reports.conf.yaml)",
+    )
     parser.add_argument("--report", nargs="+", metavar="ID",
                         help="Run one or more specific report IDs")
     parser.add_argument("--all", action="store_true",
@@ -302,8 +346,10 @@ def main() -> None:
     )
 
     # Only on-demand (non-scheduled), enabled reports
-    eligible = [r for r in cfg.get("reports", [])
-                if r.get("enabled", True) and not r.get("scheduled", False)]
+    eligible = [
+        r for r in cfg.get("reports", [])
+        if r.get("enabled", True) and not r.get("scheduled", False)
+    ]
 
     if args.report:
         wanted = set(args.report)
@@ -324,13 +370,20 @@ def main() -> None:
         logging.error("No matching reports found. Check --report IDs or --filter value.")
         sys.exit(1)
 
+    # Authenticate once; reuse the session for all reports in this run
+    if not args.dry_run:
+        logging.info("Establishing Dashboard session...")
+        session = get_dashboard_session(cfg["dashboard"])
+    else:
+        session = requests.Session()  # unused in dry-run but keeps signature consistent
+
     results: dict[str, bool] = {}
     for report in targets:
-        results[report["id"]] = run_report(report, cfg, dry_run=args.dry_run)
+        results[report["id"]] = run_report(report, cfg, session, dry_run=args.dry_run)
 
-    ok = [rid for rid, success in results.items() if success]
+    ok   = [rid for rid, success in results.items() if success]
     fail = [rid for rid, success in results.items() if not success]
-    logging.info(f"\n{'='*60}")
+    logging.info(f"\n{'=' * 60}")
     logging.info(f"Run complete — {len(ok)} succeeded, {len(fail)} failed")
     for rid in ok:
         logging.info(f"  ✓ {rid}")

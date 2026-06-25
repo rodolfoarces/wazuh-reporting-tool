@@ -27,6 +27,14 @@ dashboard:
   poll_interval_seconds: 5
   poll_max_attempts: 24               # 24 × 5 s = 2 min max wait per report
 
+  # Report generation query-string parameters.
+  # These are sent on every POST /api/reporting/generateReport/<id> request,
+  # matching the values the Wazuh Dashboard browser client sends automatically.
+  # Adjust timezone to match your environment (IANA tz database name).
+  timezone: "America/Asuncion"        # e.g. "America/New_York", "Europe/London", "UTC"
+  date_format: "MMM D, YYYY @ HH:mm:ss.SSS"
+  csv_separator: ","
+
 # -----------------------------------------------------------------------------
 # SMTP / Email delivery
 # -----------------------------------------------------------------------------
