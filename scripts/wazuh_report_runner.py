@@ -57,6 +57,7 @@ import urllib3
 import yaml
 
 from auth import generate_report, get_dashboard_session
+from pdf_converter import convert_to_pdf
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -167,11 +168,27 @@ def run_report(
 
     try:
         if not dry_run:
-            logging.info(f"[{rid}] Generating: {report['report_def_id']}")
+            fmt = report.get("format", "xlsx")
+            logging.info(f"[{rid}] Generating ({fmt}): {report['report_def_id']}")
             api_filename = generate_report(
-                session, cfg["dashboard"], report["report_def_id"], output_path
+                session, cfg["dashboard"], report["report_def_id"],
+                output_path, report_format=fmt
             )
             logging.info(f"[{rid}] ✓ Saved → {output_path}  ({api_filename})")
+
+            # Optional: convert XLSX/CSV to PDF before emailing
+            if report.get("send_as_pdf") and fmt in ("xlsx", "csv"):
+                pdf_path = output_path.with_suffix(".pdf")
+                convert_to_pdf(
+                    input_path=output_path,
+                    output_path=pdf_path,
+                    title=report.get("label", rid),
+                    subtitle=cfg.get("dashboard", {}).get("url", ""),
+                    report_date=now.strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                output_path = pdf_path
+                api_filename = pdf_path.name
+                logging.info(f"[{rid}] ✓ Converted to PDF → {pdf_path.name}")
         else:
             api_filename = f"{rid}_dry-run.xlsx"
             output_path = Path("/tmp/dry-run-placeholder.xlsx")
@@ -194,8 +211,17 @@ def run_report(
         return True
 
     except requests.HTTPError as exc:
-        logging.error(f"[{rid}] HTTP {exc.response.status_code if exc.response else '?'}: "
-                      f"{exc.response.text[:200] if exc.response else exc}")
+        status = exc.response.status_code if exc.response else "?"
+        body   = exc.response.text[:200] if exc.response else str(exc)
+        logging.error(f"[{rid}] HTTP {status}: {body}")
+        if status == 404:
+            logging.error(
+                f"[{rid}] 404 suggests the report_def_id is wrong or the report "
+                f"definition was deleted.\n"
+                f"  Configured ID : {report['report_def_id']}\n"
+                f"  To find the correct ID: Wazuh Dashboard → Reporting → "
+                f"Report Definitions → Edit → copy ID from URL"
+            )
     except Exception as exc:
         logging.error(f"[{rid}] Unexpected error: {exc}", exc_info=True)
     return False
@@ -222,10 +248,17 @@ def main() -> None:
     log_file = Path(log_cfg.get("log_file", "logs/report-runner.log"))
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
+    # Force UTF-8 on both handlers so Unicode log characters (✓ ✗ ── ⚠ →)
+    # don't crash on Windows consoles that default to cp1252.
+    _stream_handler = logging.StreamHandler(sys.stdout)
+    _stream_handler.stream = open(sys.stdout.fileno(), mode="w",
+                                  encoding="utf-8", buffering=1,
+                                  closefd=False)
+    _file_handler = logging.FileHandler(log_file, encoding="utf-8")
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else getattr(logging, log_cfg.get("level", "INFO")),
         format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler(log_file)],
+        handlers=[_stream_handler, _file_handler],
     )
 
     eligible = [r for r in cfg.get("reports", [])

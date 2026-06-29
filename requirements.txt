@@ -1,2 +1,9 @@
+# Core HTTP and config
 requests>=2.31.0
 pyyaml>=6.0.1
+
+# XLSX reading/writing
+openpyxl>=3.1.0
+
+# PDF generation from XLSX/CSV (pure Python, works on Windows and Linux)
+fpdf2>=2.7.0

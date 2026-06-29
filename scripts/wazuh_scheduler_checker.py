@@ -71,6 +71,7 @@ import urllib3
 import yaml
 
 from auth import download_report_instance, get_dashboard_session, list_reports
+from pdf_converter import convert_to_pdf
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -351,11 +352,27 @@ def check_scheduled_report(
         output_path = output_dir / local_filename
 
         if not dry_run:
-            logging.info(f"[{rid}] Downloading instance {instance['instance_id']} → {output_path}")
+            fmt = report.get("format", "xlsx")
+            logging.info(f"[{rid}] Downloading instance {instance['instance_id']} → {output_path} ({fmt})")
             api_filename = download_report_instance(
-                session, cfg["dashboard"], instance["instance_id"], output_path
+                session, cfg["dashboard"], instance["instance_id"],
+                output_path, report_format=fmt
             )
             logging.info(f"[{rid}] ✓ Saved ({api_filename})")
+
+            # Optional: convert XLSX/CSV to PDF before emailing
+            if report.get("send_as_pdf") and fmt in ("xlsx", "csv"):
+                pdf_path = output_path.with_suffix(".pdf")
+                convert_to_pdf(
+                    input_path=output_path,
+                    output_path=pdf_path,
+                    title=report.get("label", rid),
+                    subtitle=report.get("schedule_label", ""),
+                    report_date=now.strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                output_path = pdf_path
+                api_filename = pdf_path.name
+                logging.info(f"[{rid}] ✓ Converted to PDF → {pdf_path.name}")
         else:
             api_filename = f"{rid}_dry-run.xlsx"
             output_path = Path("/tmp/dry-run-placeholder.xlsx")
@@ -427,10 +444,17 @@ def main() -> None:
     log_file = Path(log_cfg.get("log_file", "logs/report-runner.log"))
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
+    # Force UTF-8 on both handlers so Unicode log characters (✓ ✗ ── ⚠ →)
+    # don't crash on Windows consoles that default to cp1252.
+    _stream_handler = logging.StreamHandler(sys.stdout)
+    _stream_handler.stream = open(sys.stdout.fileno(), mode="w",
+                                  encoding="utf-8", buffering=1,
+                                  closefd=False)
+    _file_handler = logging.FileHandler(log_file, encoding="utf-8")
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else getattr(logging, log_cfg.get("level", "INFO")),
         format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler(log_file)],
+        handlers=[_stream_handler, _file_handler],
     )
 
     scheduled = [r for r in cfg.get("reports", [])

@@ -39,10 +39,16 @@ dashboard:
   username: "admin"
   password: "Sup3rS3cret!"            # Override with WAZUH_DASH_PASS env var
   verify_ssl: false                   # Set true in production with a valid cert
-  # The Reporting API is fully synchronous — one POST returns the finished
-  # file immediately. There is no job queue or polling step.
+  # CSV/XLSX reports are synchronous — one POST returns the file immediately.
+  # PDF reports (from dashboards/visualizations) are asynchronous — the POST
+  # triggers a headless Chromium render and returns an empty data field plus
+  # a reportId. The script then polls GET until data is non-empty.
   # Increase timeout_seconds for large reports or slow servers.
   timeout_seconds: 60
+
+  # PDF-specific polling settings (ignored for CSV/XLSX):
+  pdf_poll_interval_seconds: 3    # seconds between each poll attempt
+  pdf_poll_max_attempts: 40       # 40 × 3s = 2 min max wait for PDF render
 
   # Report generation query-string parameters.
   # These are sent on every POST /api/reporting/generateReport/<id> request,
@@ -115,6 +121,11 @@ recipient_groups:
 #   email_subject         Optional subject override; supports placeholders.
 #                         On-demand: {date} {timestamp} {month} {year} {report_label}
 #   email_body            Optional body override; same placeholders available.
+#   send_as_pdf           Optional. false (default) = email the original
+#                         XLSX or CSV file as-is.
+#                         true = convert XLSX/CSV to a formatted PDF before
+#                         emailing. Uses fpdf2 (pip install fpdf2 openpyxl).
+#                         Has no effect when format is already "pdf".
 #
 # Additional fields for scheduled reports (scheduled: true):
 #   scheduled             true = managed by the OpenSearch Dashboards scheduler;
@@ -155,6 +166,7 @@ reports:
     report_def_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     format: "xlsx"
     enabled: true
+    send_as_pdf: true             # convert XLSX to PDF before emailing
     recipients:
       - soc_team
       - soc_managers
@@ -281,6 +293,7 @@ reports:
     # To verify: Dashboard → Reporting → Report Definitions → Name column
     # OR run: curl GET /api/reporting/reports and check report_name in the response.
     report_name_match: "Wazuh - FIM Daily Overview"
+    send_as_pdf: true             # convert XLSX to PDF before emailing
 
     # Scheduled at 18:00, checker cron runs at 18:15 → 30 min window is enough.
     # Use 90 if the report takes a long time to generate.

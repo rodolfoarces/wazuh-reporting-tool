@@ -37,7 +37,7 @@ wazuh-reports/
 # 1. Enter the project directory
 cd ~/Projects/Wazuh/wazuh-reports
 
-# 2. Install Python dependencies
+# 2. Install Python dependencies (includes fpdf2 and openpyxl for PDF conversion)
 pip3 install -r requirements.txt
 
 # 3. Create your live config from the example
@@ -419,6 +419,64 @@ wazuh_scheduler_checker.py
 > silent failures where the wrong report (or no report) gets matched.
 
 ---
+
+---
+
+## PDF conversion from XLSX / CSV
+
+When `send_as_pdf: true` is set on a report definition, the script downloads
+the XLSX or CSV from the Indexer as usual, then converts it to a formatted PDF
+using **fpdf2** before attaching it to the email. The original XLSX/CSV is kept
+in `logs/downloads/` for reference.
+
+This is the recommended approach for delivering visualization-style data
+reports via email when the native PDF generation from the Wazuh Dashboard
+is not accessible via the API.
+
+### Install the dependency
+
+```bash
+pip install fpdf2 openpyxl
+# or install all dependencies at once:
+pip install -r requirements.txt
+```
+
+Both `fpdf2` and `openpyxl` are pure Python — no system-level dependencies
+required. Works on Windows and Linux without any extra setup.
+
+### Enable per report
+
+```yaml
+  - id: "critical_alerts_daily"
+    label: "Critical Alerts — Daily Summary"
+    report_def_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    format: "xlsx"           # downloaded format from the Indexer
+    send_as_pdf: true        # convert to PDF before emailing
+    recipients:
+      - soc_team
+```
+
+`send_as_pdf` has no effect when `format` is already `"pdf"`.
+
+### PDF output characteristics
+
+The generated PDF is landscape A4 with:
+- Wazuh-branded header (dark blue) with report title, subtitle, and date
+- Auto-sized columns distributed across the full page width
+- Alternating row shading for readability
+- Long cell values truncated with ellipsis to fit the column
+- Page number and timestamp footer on every page
+- Column headers repeated on each new page
+
+### Standalone conversion (testing)
+
+```bash
+# Convert a file directly without running a full report
+python3 scripts/pdf_converter.py logs/downloads/my_report.xlsx output.pdf \
+    --title "Critical Alerts" \
+    --subtitle "Daily at 07:00" \
+    --date "2026-06-29 07:00:00"
+```
 
 ## Cron setup
 
