@@ -7,6 +7,9 @@ logs/downloads/
 # Delivery marker files (created by scheduler checker)
 logs/.sent_*
 
+# General logs
+logs/*.log
+
 # Python
 __pycache__/
 *.pyc
