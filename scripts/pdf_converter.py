@@ -41,6 +41,8 @@ Usage (standalone):
   python3 pdf_converter.py input.csv  output.pdf --title "My Report"
 """
 
+from __future__ import annotations
+
 import argparse
 import csv
 import logging
@@ -179,7 +181,7 @@ def convert_to_pdf(
     title: str = "Wazuh Report",
     subtitle: str = "",
     report_date: str = "",
-    logo_path: "Path | None" = None,
+    logo_path: Path | None = None,
 ) -> Path:
     """
     Convert a CSV or XLSX file to a formatted PDF.

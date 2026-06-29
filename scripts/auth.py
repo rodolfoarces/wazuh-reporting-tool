@@ -62,6 +62,8 @@ generate_report_sync(). Both converge on decode_and_save() once data
 is non-empty.
 """
 
+from __future__ import annotations
+
 import base64
 import logging
 import time
