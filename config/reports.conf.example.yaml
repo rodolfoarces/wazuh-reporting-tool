@@ -1,5 +1,5 @@
 # =============================================================================
-# Wazuh Indexer Report Automation — Configuration
+# Wazuh Indexer Report Automation -- Configuration
 # reports.conf.example.yaml
 #
 # USAGE:
@@ -27,8 +27,8 @@
 #   Scheduled  : {date} {timestamp} {month} {year} {report_label}
 #                {schedule_label} {generated_at} {instance_id}
 #   INVALID (will cause KeyError):
-#                {completed_at}  →  use {generated_at} instead
-#                {job_id}        →  use {instance_id} instead
+#                {completed_at}  ->  use {generated_at} instead
+#                {job_id}        ->  use {instance_id} instead
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -39,8 +39,8 @@ dashboard:
   username: "admin"
   password: "Sup3rS3cret!"            # Override with WAZUH_DASH_PASS env var
   verify_ssl: false                   # Set true in production with a valid cert
-  # CSV/XLSX reports are synchronous — one POST returns the file immediately.
-  # PDF reports (from dashboards/visualizations) are asynchronous — the POST
+  # CSV/XLSX reports are synchronous --one POST returns the file immediately.
+  # PDF reports (from dashboards/visualizations) are asynchronous --the POST
   # triggers a headless Chromium render and returns an empty data field plus
   # a reportId. The script then polls GET until data is non-empty.
   # Increase timeout_seconds for large reports or slow servers.
@@ -48,7 +48,7 @@ dashboard:
 
   # PDF-specific polling settings (ignored for CSV/XLSX):
   pdf_poll_interval_seconds: 3    # seconds between each poll attempt
-  pdf_poll_max_attempts: 40       # 40 × 3s = 2 min max wait for PDF render
+  pdf_poll_max_attempts: 40       # 40 x 3s = 2 min max wait for PDF render
 
   # Report generation query-string parameters.
   # These are sent on every POST /api/reporting/generateReport/<id> request,
@@ -102,13 +102,13 @@ recipient_groups:
 # Report definitions
 #
 # Each entry maps to a Report Definition in the Wazuh / OpenSearch Dashboards
-# UI (Reporting → Report Definitions).
+# UI (Reporting -> Report Definitions).
 #
 # To find your report_def_id:
-#   1. Open Wazuh Dashboard → Reporting → Report Definitions
+#   1. Open Wazuh Dashboard -> Reporting -> Report Definitions
 #   2. Click Edit on the report
 #   3. Copy the ID from the URL:
-#      …/reporting/edit/report_definition/THIS-IS-YOUR-ID
+#      .../reporting/edit/report_definition/THIS-IS-YOUR-ID
 #
 # Fields:
 #   id                    Unique key used in CLI calls and log entries
@@ -135,34 +135,34 @@ recipient_groups:
 #
 #   report_name_match     REQUIRED for scheduled reports.
 #                         Must match _source.report_definition.report_params.report_name
-#                         in the job queue — i.e. the Report Definition name as entered
+#                         in the job queue --i.e. the Report Definition name as entered
 #                         in the Wazuh Dashboard UI.
 #                         To find it:
-#                           Option A: Dashboard → Reporting → Report Definitions → Name column
+#                           Option A: Dashboard -> Reporting -> Report Definitions -> Name column
 #                           Option B: curl GET /api/reporting/reports and read report_name
 #                         NOTE: this is NOT the id or label field in this config file.
 #
 #   check_window_minutes  How far back (minutes) to search the job queue for a
 #                         completed scheduled instance.
 #                         Rule of thumb: (cron offset from schedule) + 15 min buffer.
-#                         Example: scheduled at 18:00, cron at 18:15 → 30 min is enough.
+#                         Example: scheduled at 18:00, cron at 18:15 -> 30 min is enough.
 #
 # Scheduled report email placeholders (different from on-demand):
 #   {date}           Today's date
 #   {timestamp}      Datetime when the checker ran
-#   {generated_at}   When the matched job queue instance was created  ← use this, not {completed_at}
-#   {instance_id}    The job queue _id of the matched instance         ← use this, not {job_id}
+#   {generated_at}   When the matched job queue instance was created  <- use this, not {completed_at}
+#   {instance_id}    The job queue _id of the matched instance         <- use this, not {job_id}
 #   {schedule_label} The schedule_label field from this entry
 #   {report_label}   The label field from this entry
 #   {month} {year}   Month name and year
 # -----------------------------------------------------------------------------
 reports:
 
-  # ── On-demand reports ──────────────────────────────────────────────────────
+  # -- On-demand reports ----------------------------------------------------------
   # Triggered explicitly via CLI or cron using wazuh_report_runner.py
 
   - id: "critical_alerts_daily"
-    label: "Critical Alerts — Daily Summary"
+    label: "Critical Alerts -- Daily Summary"
     report_def_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     format: "xlsx"
     enabled: true
@@ -170,7 +170,7 @@ reports:
     recipients:
       - soc_team
       - soc_managers
-    email_subject: "🚨 Wazuh Critical Alerts — {date}"
+    email_subject: "Wazuh Critical Alerts -- {date}"
     email_body: |
       Please find attached the daily Critical Alerts report generated by Wazuh.
 
@@ -180,34 +180,34 @@ reports:
       This report covers all events with severity level 12 and above
       recorded in the past 24 hours.
 
-      — Wazuh Report System
+      --Wazuh Report System
 
   - id: "failed_logins_weekly"
-    label: "Failed Login Attempts — Weekly"
+    label: "Failed Login Attempts --Weekly"
     report_def_id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
     format: "csv"
     enabled: true
     recipients:
       - soc_team
       - it_operations
-    email_subject: "Wazuh Weekly Failed Logins — {date}"
+    email_subject: "Wazuh Weekly Failed Logins --{date}"
     email_body: |
       Attached is the weekly Failed Login Attempts report.
 
       Report date: {date}
       Covers     : last 7 days
 
-      — Wazuh Report System
+      --Wazuh Report System
 
   - id: "compliance_pci_monthly"
-    label: "PCI-DSS Compliance Overview — Monthly"
+    label: "PCI-DSS Compliance Overview --Monthly"
     report_def_id: "c3d4e5f6-a7b8-9012-cdef-123456789012"
     format: "xlsx"
     enabled: true
     recipients:
       - compliance
       - soc_managers
-    email_subject: "Wazuh PCI-DSS Compliance Report — {month} {year}"
+    email_subject: "Wazuh PCI-DSS Compliance Report --{month} {year}"
     email_body: |
       Please find the monthly PCI-DSS compliance overview attached.
 
@@ -216,28 +216,28 @@ reports:
       This report is auto-generated. Contact the SOC team with any
       questions regarding findings.
 
-      — Wazuh Report System
+      --Wazuh Report System
 
   - id: "vulnerability_summary"
     label: "Vulnerability Summary"
     report_def_id: "d4e5f6a7-b8c9-0123-defa-234567890123"
     format: "xlsx"
-    enabled: false                    # Disabled — enable when report definition is ready
+    enabled: false                    # Disabled --enable when report definition is ready
     recipients:
       - soc_managers
       - compliance
-    email_subject: "Wazuh Vulnerability Summary — {date}"
+    email_subject: "Wazuh Vulnerability Summary --{date}"
 
-  # ── Scheduled reports ──────────────────────────────────────────────────────
+  # -- Scheduled reports ----------------------------------------------------------
   # These are NOT triggered by wazuh_report_runner.py.
   # The OpenSearch Dashboards Report Scheduler runs them automatically.
   # wazuh_scheduler_checker.py queries the job queue, finds the matching
   # instance, re-executes it via GET, and emails the result.
   # Run the checker ~15 min after each scheduled generation time via cron.
-  # REQUIRED field: report_name_match — see field docs above.
+  # REQUIRED field: report_name_match --see field docs above.
 
   - id: "scheduled_daily_overview"
-    label: "Scheduled — Daily Security Overview"
+    label: "Scheduled --Daily Security Overview"
     report_def_id: "e5f6a7b8-c9d0-1234-efab-345678901234"
     format: "xlsx"
     enabled: true
@@ -247,7 +247,7 @@ reports:
     check_window_minutes: 90           # search job queue for instances in the last 90 min
     recipients:
       - all_security
-    email_subject: "Wazuh Daily Overview (Scheduled) — {date}"
+    email_subject: "Wazuh Daily Overview (Scheduled) --{date}"
     email_body: |
       This is the automatically scheduled Daily Security Overview.
 
@@ -256,10 +256,10 @@ reports:
       Generated at : {generated_at}
       Instance ID  : {instance_id}
 
-      — Wazuh Report System
+      --Wazuh Report System
 
   - id: "scheduled_weekly_threat"
-    label: "Scheduled — Weekly Threat Intelligence"
+    label: "Scheduled --Weekly Threat Intelligence"
     report_def_id: "f6a7b8c9-d0e1-2345-fabc-456789012345"
     format: "xlsx"
     enabled: true
@@ -270,7 +270,7 @@ reports:
     recipients:
       - soc_managers
       - soc_team
-    email_subject: "Wazuh Weekly Threat Report (Scheduled) — {date}"
+    email_subject: "Wazuh Weekly Threat Report (Scheduled) --{date}"
     email_body: |
       Attached is the scheduled Weekly Threat Intelligence report.
 
@@ -279,10 +279,10 @@ reports:
       Generated at : {generated_at}
       Instance ID  : {instance_id}
 
-      — Wazuh Report System
+      --Wazuh Report System
 
   - id: "scheduled_fim_daily_overview"
-    label: "Scheduled — Daily FIM Security Overview"
+    label: "Scheduled --Daily FIM Security Overview"
     report_def_id: "KoyUAJ8BYNS2laJ49cmD"   # from Report Definition edit URL
     format: "xlsx"
     enabled: true
@@ -290,18 +290,18 @@ reports:
     schedule_label: "Daily at 18:00"
 
     # report_name_match: the exact name entered in the Dashboard Report Definition.
-    # To verify: Dashboard → Reporting → Report Definitions → Name column
+    # To verify: Dashboard -> Reporting -> Report Definitions -> Name column
     # OR run: curl GET /api/reporting/reports and check report_name in the response.
     report_name_match: "Wazuh - FIM Daily Overview"
     send_as_pdf: true             # convert XLSX to PDF before emailing
 
-    # Scheduled at 18:00, checker cron runs at 18:15 → 30 min window is enough.
+    # Scheduled at 18:00, checker cron runs at 18:15 -> 30 min window is enough.
     # Use 90 if the report takes a long time to generate.
     check_window_minutes: 90
 
     recipients:
       - soc_team
-    email_subject: "Wazuh FIM Daily Overview (Scheduled) — {date}"
+    email_subject: "Wazuh FIM Daily Overview (Scheduled) --{date}"
     email_body: |
       Scheduled Daily FIM Security Overview attached.
 
@@ -309,7 +309,7 @@ reports:
       Generated at : {generated_at}
       Instance ID  : {instance_id}
 
-      — Wazuh Report System
+      --Wazuh Report System
 
 # -----------------------------------------------------------------------------
 # Local storage for downloaded report files

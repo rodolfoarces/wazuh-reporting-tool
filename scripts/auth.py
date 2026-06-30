@@ -11,22 +11,22 @@ The Wazuh Dashboard Reporting API uses cookie-based session authentication.
 Basic Auth is rejected by the Dashboards application layer. The correct flow:
 
   POST /auth/login  { username, password }
-  → Set-Cookie: security_authentication=Fe26.2**...
-  → All subsequent requests carry that cookie via the Session object.
+  -> Set-Cookie: security_authentication=Fe26.2**...
+  -> All subsequent requests carry that cookie via the Session object.
 
 API endpoint map (confirmed from observed browser traffic)
 ----------------------------------------------------------
 
-  Generate on-demand (CSV/XLSX — synchronous):
+  Generate on-demand (CSV/XLSX --synchronous):
     POST /api/reporting/generateReport/<report_def_id>
          ?timezone=...&dateFormat=...&csvSeparator=...&allowLeadingWildcards=true
     Body: empty
-    → 200 OK  { "data": "data:<mime>;base64,<content>", "filename": "<name>" }
+    -> 200 OK  { "data": "data:<mime>;base64,<content>", "filename": "<name>" }
     The connection blocks until generation is complete. No polling needed.
 
-  Generate on-demand (PDF from dashboard/visualization — asynchronous):
+  Generate on-demand (PDF from dashboard/visualization --asynchronous):
     POST /api/reporting/generateReport/<report_def_id>  (same endpoint)
-    → 200 OK  { "data": "", "filename": "<name>.pdf",
+    -> 200 OK  { "data": "", "filename": "<name>.pdf",
                 "reportId": "<id>", "queryUrl": "<dashboard_url>" }
     data is intentionally EMPTY on the POST response. The server-side
     headless Chromium browser loads queryUrl, renders it, and stores the
@@ -35,24 +35,24 @@ API endpoint map (confirmed from observed browser traffic)
   Poll / download PDF by reportId:
     GET  /api/reporting/generateReport/<reportId>
          ?timezone=...&dateFormat=...&csvSeparator=...&allowLeadingWildcards=true
-    → 200 OK  { "data": "", ... }               ← still rendering
-    → 200 OK  { "data": "...;base64,...", ... }  ← ready, same shape as CSV/XLSX
+    -> 200 OK  { "data": "", ... }               <- still rendering
+    -> 200 OK  { "data": "...;base64,...", ... }  <- ready, same shape as CSV/XLSX
 
   List existing report instances (job queue):
     GET  /api/reporting/reports
-    → 200 OK  { "data": [ { "_id": "...", "_source": { ... } } ] }
+    -> 200 OK  { "data": [ { "_id": "...", "_source": { ... } } ] }
     Includes both on-demand and scheduled instances.
     Key fields per entry:
-      _source.report_definition.report_params.report_name  — definition name
-      _source.report_definition.trigger.trigger_type       — "On demand"|"Schedule"
-      _source.report_definition.core_params.report_format  — "csv"|"xlsx"|"pdf"
-      _source.time_created                                  — epoch ms
+      _source.report_definition.report_params.report_name  --definition name
+      _source.report_definition.trigger.trigger_type       --"On demand"|"Schedule"
+      _source.report_definition.core_params.report_format  --"csv"|"xlsx"|"pdf"
+      _source.time_created                                  --epoch ms
 
   Re-execute an existing report instance by _id:
     GET  /api/reporting/generateReport/<instance_id>  (same endpoint as PDF poll)
     For CSV/XLSX: returns inline content immediately (synchronous).
     For PDF: may return empty data if still rendering; poll until non-empty.
-    NOTE: the API re-executes the query — it does not serve a stored file.
+    NOTE: the API re-executes the query --it does not serve a stored file.
 
 How to detect PDF vs CSV/XLSX
 ------------------------------
@@ -75,7 +75,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-# ── Session authentication ─────────────────────────────────────────────────────
+# -- Session authentication -----------------------------------------------------
 
 def get_dashboard_session(dashboard_cfg: dict) -> requests.Session:
     """
@@ -110,7 +110,7 @@ def get_dashboard_session(dashboard_cfg: dict) -> requests.Session:
     return session
 
 
-# ── Shared query-string parameters ────────────────────────────────────────────
+# -- Shared query-string parameters --------------------------------------------
 
 def build_report_params(dashboard_cfg: dict) -> str:
     """
@@ -125,7 +125,7 @@ def build_report_params(dashboard_cfg: dict) -> str:
       &allowLeadingWildcards=true
 
     Returns a pre-encoded string. Pass as params=None and append manually,
-    or use requests' params= with a dict — but to guarantee %20 encoding,
+    or use requests' params= with a dict --but to guarantee %20 encoding,
     build the URL string directly using this output.
     """
     from urllib.parse import urlencode, quote
@@ -143,7 +143,7 @@ def _report_url(base_url: str, report_id: str, dashboard_cfg: dict) -> str:
     return f"{base_url}/api/reporting/generateReport/{report_id}?{build_report_params(dashboard_cfg)}"
 
 
-# ── Shared file decode/write helper ───────────────────────────────────────────
+# -- Shared file decode/write helper -------------------------------------------
 
 def decode_and_save(response_body: dict, output_path: Path) -> str:
     """
@@ -179,11 +179,11 @@ def decode_and_save(response_body: dict, output_path: Path) -> str:
     with open(output_path, "wb") as f:
         f.write(file_bytes)
 
-    logging.debug(f"  Written {len(file_bytes):,} bytes → {output_path}")
+    logging.debug(f"  Written {len(file_bytes):,} bytes -> {output_path}")
     return filename
 
 
-# ── On-demand generation — CSV/XLSX (synchronous POST) ────────────────────────
+# -- On-demand generation --CSV/XLSX (synchronous POST) ------------------------
 
 def generate_report_sync(
     session: requests.Session,
@@ -198,7 +198,7 @@ def generate_report_sync(
     is returned inline as a base64 data-URI. No polling needed.
 
     POST /api/reporting/generateReport/<report_def_id>?...
-    → { "data": "data:<mime>;base64,<content>", "filename": "..." }
+    -> { "data": "data:<mime>;base64,<content>", "filename": "..." }
 
     Returns the API-provided filename.
     """
@@ -214,7 +214,7 @@ def generate_report_sync(
     return decode_and_save(resp.json(), output_path)
 
 
-# ── On-demand generation — PDF (asynchronous POST + poll) ─────────────────────
+# -- On-demand generation --PDF (asynchronous POST + poll) ---------------------
 
 def generate_report_pdf(
     session: requests.Session,
@@ -227,18 +227,18 @@ def generate_report_pdf(
 
     PDF reports use an asynchronous headless Chromium render pipeline:
 
-      Step 1 — POST to trigger:
+      Step 1 --POST to trigger:
         POST /api/reporting/generateReport/<report_def_id>?...
-        → { "data": "",                    ← intentionally empty
+        -> { "data": "",                    <- intentionally empty
             "filename": "<name>.pdf",
             "reportId": "<poll_id>",
-            "queryUrl": "<dashboard_url>"  ← Chromium loads this URL
+            "queryUrl": "<dashboard_url>"  <- Chromium loads this URL
           }
 
-      Step 2 — Poll GET until data is non-empty:
+      Step 2 --Poll GET until data is non-empty:
         GET /api/reporting/generateReport/<reportId>?...
-        → { "data": "", ... }               ← still rendering
-        → { "data": "...;base64,...", ... } ← complete
+        -> { "data": "", ... }               <- still rendering
+        -> { "data": "...;base64,...", ... } <- complete
 
     Poll interval and max attempts are read from dashboard_cfg:
       pdf_poll_interval_seconds  (default: 3)
@@ -265,11 +265,11 @@ def generate_report_pdf(
 
     if not report_id:
         # data was already inline (unexpected for PDF, but handle gracefully)
-        logging.debug("  PDF POST returned data inline — no polling needed.")
+        logging.debug("  PDF POST returned data inline --no polling needed.")
         return decode_and_save(body, output_path)
 
     logging.info(
-        f"  PDF render triggered — reportId: {report_id}\n"
+        f"  PDF render triggered --reportId: {report_id}\n"
         f"  Chromium loading: {query_url[:120]}"
     )
 
@@ -304,11 +304,11 @@ def generate_report_pdf(
     raise TimeoutError(
         f"PDF report did not complete after {max_attempts} polls "
         f"({max_attempts * interval}s). reportId: {report_id}\n"
-        f"Check the Wazuh Dashboard → Reporting → Reports for status."
+        f"Check the Wazuh Dashboard -> Reporting -> Reports for status."
     )
 
 
-# ── Unified generate dispatcher ───────────────────────────────────────────────
+# -- Unified generate dispatcher -----------------------------------------------
 
 def generate_report(
     session: requests.Session,
@@ -320,8 +320,8 @@ def generate_report(
     """
     Dispatch to the correct generation function based on report_format.
 
-    CSV/XLSX → generate_report_sync()  (single POST, inline response)
-    PDF      → generate_report_pdf()   (POST trigger + GET poll loop)
+    CSV/XLSX -> generate_report_sync()  (single POST, inline response)
+    PDF      -> generate_report_pdf()   (POST trigger + GET poll loop)
 
     The report_format should be taken from the config entry's 'format' field.
     Returns the API-provided filename.
@@ -331,7 +331,7 @@ def generate_report(
     return generate_report_sync(session, dashboard_cfg, report_def_id, output_path)
 
 
-# ── Report instance list (job queue) ──────────────────────────────────────────
+# -- Report instance list (job queue) ------------------------------------------
 
 def list_reports(
     session: requests.Session,
@@ -341,7 +341,7 @@ def list_reports(
     Retrieve all report instances from the job queue.
 
     GET /api/reporting/reports
-    → { "data": [ { "_id": "...", "_source": { ... } } ] }
+    -> { "data": [ { "_id": "...", "_source": { ... } } ] }
 
     Returns the raw list. Includes on-demand and scheduled instances for
     all formats (CSV, XLSX, PDF).
@@ -356,7 +356,7 @@ def list_reports(
     return resp.json().get("data", [])
 
 
-# ── Re-execute / download an existing report instance ─────────────────────────
+# -- Re-execute / download an existing report instance -------------------------
 
 def download_report_instance(
     session: requests.Session,
@@ -373,10 +373,10 @@ def download_report_instance(
                   poll until data is non-empty using the same reportId loop.
 
     GET /api/reporting/generateReport/<instance_id>?...
-    → { "data": "...;base64,...", "filename": "..." }   ← CSV/XLSX (immediate)
-    → { "data": "", "reportId": "...", ... }             ← PDF (poll needed)
+    -> { "data": "...;base64,...", "filename": "..." }   <- CSV/XLSX (immediate)
+    -> { "data": "", "reportId": "...", ... }             <- PDF (poll needed)
 
-    NOTE: the API re-executes the report query — it does not serve stored files.
+    NOTE: the API re-executes the report query --it does not serve stored files.
     Returns the API-provided filename.
     """
     base_url = dashboard_cfg["url"].rstrip("/")
@@ -394,7 +394,7 @@ def download_report_instance(
     if body.get("data"):
         return decode_and_save(body, output_path)
 
-    # PDF: data is empty — poll using the reportId returned in this response
+    # PDF: data is empty --poll using the reportId returned in this response
     if report_format.lower() == "pdf":
         report_id = body.get("reportId")
         if not report_id:
@@ -402,7 +402,7 @@ def download_report_instance(
                 f"PDF download: data is empty and no reportId in response. "
                 f"Keys: {list(body.keys())}"
             )
-        logging.info(f"  PDF re-execution triggered — polling reportId: {report_id}")
+        logging.info(f"  PDF re-execution triggered --polling reportId: {report_id}")
 
         interval     = dashboard_cfg.get("pdf_poll_interval_seconds", 3)
         max_attempts = dashboard_cfg.get("pdf_poll_max_attempts", 40)

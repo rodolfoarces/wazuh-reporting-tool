@@ -4,14 +4,14 @@ pdf_converter.py
 ================
 Converts a Wazuh report file (XLSX or CSV) to a formatted PDF using fpdf2.
 
-Works on Windows and Linux with no system-level dependencies — fpdf2 is a
+Works on Windows and Linux with no system-level dependencies -- fpdf2 is a
 pure-Python library that embeds its own font handling.
 
 The generated PDF:
   - Landscape A4 page
   - Wazuh-branded header (dark blue, configurable title and subtitle)
   - Auto-sized columns distributed across the page width
-  - Full cell content always visible — each row height is measured per-row
+  - Full cell content always visible -- each row height is measured per-row
     so rows are only as tall as needed and follow continuously with no gaps
   - Alternating row shading for readability
   - Footer with page number and generation timestamp
@@ -22,11 +22,11 @@ Row rendering strategy
 fpdf2's multi_cell() adds inter-cell spacing that produces gaps between rows.
 Instead, each row is rendered in two passes using cell():
 
-  Pass 1 — measure: iterate cells, count wrapped lines per cell using
+  Pass 1 -- measure: iterate cells, count wrapped lines per cell using
             pdf.get_string_width(), take the maximum line count across
             all cells to get the row height.
 
-  Pass 2 — draw: render each cell at the measured row height using
+  Pass 2 -- draw: render each cell at the measured row height using
             cell() with a manual word-wrap simulation (split the value
             into lines, draw each line as a sub-cell stacked vertically,
             fill the remainder of the cell height with a blank cell).
@@ -49,7 +49,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-# ── Colour palette ─────────────────────────────────────────────────────────────
+# -- Colour palette -------------------------------------------------------------
 
 HEADER_BG   = (26,  74, 107)
 HEADER_FG   = (255, 255, 255)
@@ -61,14 +61,14 @@ SUBTITLE_FG = (100, 116, 135)
 FOOTER_FG   = (150, 160, 170)
 
 
-# ── Latin-1 sanitiser ─────────────────────────────────────────────────────────
+# -- Latin-1 sanitiser ---------------------------------------------------------
 
 def _safe(text: str) -> str:
-    """Replace characters outside Latin-1 with '?' — Helvetica is Latin-1 only."""
+    """Replace characters outside Latin-1 with '?' -- Helvetica is Latin-1 only."""
     return "".join(c if ord(c) <= 255 else "?" for c in text)
 
 
-# ── Data loading ──────────────────────────────────────────────────────────────
+# -- Data loading --------------------------------------------------------------
 
 def load_xlsx(path: Path) -> tuple[list[str], list[list]]:
     try:
@@ -109,7 +109,7 @@ def load_file(path: Path) -> tuple[list[str], list[list]]:
     raise ValueError(f"Unsupported file type: '{suffix}'. Expected .xlsx or .csv")
 
 
-# ── Column width calculation ───────────────────────────────────────────────────
+# -- Column width calculation ---------------------------------------------------
 
 def calculate_col_widths(
     headers: list[str],
@@ -120,7 +120,7 @@ def calculate_col_widths(
 ) -> list[float]:
     """
     Proportional column widths based on actual content length.
-    No character cap — columns reflect real data widths.
+    No character cap -- columns reflect real data widths.
     Minimum 12 mm per column.
     """
     n = len(headers)
@@ -136,7 +136,7 @@ def calculate_col_widths(
     return [w * scale for w in widths]
 
 
-# ── Word-wrap helper ──────────────────────────────────────────────────────────
+# -- Word-wrap helper ----------------------------------------------------------
 
 def _wrap_text(pdf, text: str, col_width_mm: float) -> list[str]:
     """
@@ -173,7 +173,7 @@ def _wrap_text(pdf, text: str, col_width_mm: float) -> list[str]:
     return lines or [""]
 
 
-# ── PDF builder ───────────────────────────────────────────────────────────────
+# -- PDF builder ---------------------------------------------------------------
 
 def convert_to_pdf(
     input_path: Path,
@@ -212,7 +212,7 @@ def convert_to_pdf(
     if not report_date:
         report_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Resolve logo path — fall back to assets/wazuh-logo.png if not given
+    # Resolve logo path -- fall back to assets/wazuh-logo.png if not given
     if logo_path is None:
         _default = Path(__file__).resolve().parent.parent / "assets" / "wazuh-logo.png"
         logo_path = _default if _default.exists() else None
@@ -252,7 +252,7 @@ def convert_to_pdf(
     FOOT_H    = 15        # space reserved for footer
     col_widths = calculate_col_widths(headers, rows, USABLE_W, FONT_SIZE)
 
-    # ── Page header ───────────────────────────────────────────────────────────
+    # -- Page header -----------------------------------------------------------
     def draw_page_header() -> float:
         """Draw title block + column labels. Returns Y position after header."""
         pdf.set_xy(pdf.l_margin, pdf.t_margin)
@@ -296,13 +296,13 @@ def convert_to_pdf(
 
     y = draw_page_header()
 
-    # ── Data rows ─────────────────────────────────────────────────────────────
+    # -- Data rows -------------------------------------------------------------
     pdf.set_font("Helvetica", "", FONT_SIZE)
 
     for row_idx, row in enumerate(rows):
         cells = [_safe(str(row[i]) if i < len(row) else "") for i in range(len(col_widths))]
 
-        # Pass 1 — measure: find the maximum number of lines across all cells
+        # Pass 1 -- measure: find the maximum number of lines across all cells
         wrapped = []
         for val, w in zip(cells, col_widths):
             lines = _wrap_text(pdf, val, w - CELL_PAD)
@@ -321,7 +321,7 @@ def convert_to_pdf(
 
         fill_color = ROW_EVEN if row_idx % 2 == 0 else ROW_ODD
 
-        # Pass 2 — draw: each cell rendered as stacked line sub-cells
+        # Pass 2 -- draw: each cell rendered as stacked line sub-cells
         x = pdf.l_margin
         for lines, w in zip(wrapped, col_widths):
             cy = y
@@ -359,14 +359,14 @@ def convert_to_pdf(
 
         y += row_height
 
-    # ── Write ─────────────────────────────────────────────────────────────────
+    # -- Write -----------------------------------------------------------------
     output_path.parent.mkdir(parents=True, exist_ok=True)
     pdf.output(str(output_path))
     logging.info(f"  PDF written: {output_path} ({output_path.stat().st_size:,} bytes)")
     return output_path
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+# -- CLI -----------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Convert XLSX/CSV to PDF")

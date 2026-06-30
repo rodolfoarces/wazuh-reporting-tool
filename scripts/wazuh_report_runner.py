@@ -5,7 +5,7 @@ wazuh_report_runner.py
 On-demand report executor for Wazuh / OpenSearch Dashboards.
 
 Reads all configuration (connection, SMTP, recipients, report definitions)
-from the YAML config file. No report logic lives here — add or change reports
+from the YAML config file. No report logic lives here -- add or change reports
 by editing config/reports.conf.yaml only.
 
 Authentication
@@ -21,7 +21,7 @@ A single synchronous POST generates and returns the report immediately:
   POST /api/reporting/generateReport/<report_def_id>
        ?timezone=...&dateFormat=...&csvSeparator=...&allowLeadingWildcards=true
   Body: empty
-  → { "data": "data:<mime>;base64,<content>", "filename": "<name>" }
+  -> { "data": "data:<mime>;base64,<content>", "filename": "<name>" }
 
 There is no polling step. The connection blocks until generation completes
 and the full file is returned inline as a base64 data-URI.
@@ -66,7 +66,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 CONFIG_PATH_DEFAULT = Path(__file__).resolve().parent.parent / "config" / "reports.conf.yaml"
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# -- Config --------------------------------------------------------------------
 
 def load_config(path: str) -> dict:
     with open(path) as f:
@@ -88,13 +88,13 @@ def resolve_recipients(report: dict, recipient_groups: dict) -> list[str]:
             emails.append(entry)
         else:
             logging.warning(
-                f"Unknown recipient entry '{entry}' in report '{report['id']}' — skipping."
+                f"Unknown recipient entry '{entry}' in report '{report['id']}' -- skipping."
             )
     seen: set = set()
     return [e for e in emails if not (e in seen or seen.add(e))]
 
 
-# ── Email ─────────────────────────────────────────────────────────────────────
+# -- Email ---------------------------------------------------------------------
 
 def render_template(template: str, report: dict, extra: dict | None = None) -> str:
     now = datetime.now()
@@ -134,7 +134,7 @@ def send_email(
     msg.attach(part)
 
     if dry_run:
-        logging.info(f"  [DRY-RUN] Would send '{subject}' → {recipients}")
+        logging.info(f"  [DRY-RUN] Would send '{subject}' -> {recipients}")
         return
 
     with smtplib.SMTP(smtp_cfg["host"], smtp_cfg["port"]) as server:
@@ -142,10 +142,10 @@ def send_email(
             server.starttls()
         server.login(smtp_cfg["username"], smtp_cfg["password"])
         server.sendmail(smtp_cfg["from_address"], recipients, msg.as_string())
-    logging.info(f"  ✓ Email sent: '{subject}' → {recipients}")
+    logging.info(f"  [ok] Email sent: '{subject}' -> {recipients}")
 
 
-# ── Core runner ───────────────────────────────────────────────────────────────
+# -- Core runner ---------------------------------------------------------------
 
 def run_report(
     report: dict,
@@ -153,15 +153,15 @@ def run_report(
     session: requests.Session,
     dry_run: bool = False,
 ) -> bool:
-    """Execute a single on-demand report: POST generate → save → email."""
+    """Execute a single on-demand report: POST generate -> save -> email."""
     rid = report["id"]
     output_dir = Path(cfg.get("storage", {}).get("output_dir", "logs/downloads"))
 
-    logging.info(f"[{rid}] ── Starting: {report['label']}")
+    logging.info(f"[{rid}] -- Starting: {report['label']}")
 
     recipients = resolve_recipients(report, cfg.get("recipient_groups", {}))
     if not recipients:
-        logging.warning(f"[{rid}] No recipients resolved — skipping.")
+        logging.warning(f"[{rid}] No recipients resolved -- skipping.")
         return False
 
     now = datetime.now()
@@ -176,7 +176,7 @@ def run_report(
                 session, cfg["dashboard"], report["report_def_id"],
                 output_path, report_format=fmt
             )
-            logging.info(f"[{rid}] ✓ Saved → {output_path}  ({api_filename})")
+            logging.info(f"[{rid}] [ok] Saved -> {output_path}  ({api_filename})")
 
             # Optional: convert XLSX/CSV to PDF before emailing
             if report.get("send_as_pdf") and fmt in ("xlsx", "csv"):
@@ -190,7 +190,7 @@ def run_report(
                 )
                 output_path = pdf_path
                 api_filename = pdf_path.name
-                logging.info(f"[{rid}] ✓ Converted to PDF → {pdf_path.name}")
+                logging.info(f"[{rid}] [ok] Converted to PDF -> {pdf_path.name}")
         else:
             api_filename = f"{rid}_dry-run.xlsx"
             output_path = Path("/tmp/dry-run-placeholder.xlsx")
@@ -198,7 +198,7 @@ def run_report(
             logging.info(f"[{rid}] [DRY-RUN] Skipping API call.")
 
         subject = render_template(
-            report.get("email_subject", "Wazuh Report: {report_label} — {date}"), report
+            report.get("email_subject", "Wazuh Report: {report_label} -- {date}"), report
         )
         body = render_template(
             report.get("email_body",
@@ -209,7 +209,7 @@ def run_report(
         send_email(cfg["smtp"], recipients, subject, body, output_path,
                    attachment_name=api_filename, dry_run=dry_run)
 
-        logging.info(f"[{rid}] ✓ Done.")
+        logging.info(f"[{rid}] [ok] Done.")
         return True
 
     except requests.HTTPError as exc:
@@ -221,15 +221,15 @@ def run_report(
                 f"[{rid}] 404 suggests the report_def_id is wrong or the report "
                 f"definition was deleted.\n"
                 f"  Configured ID : {report['report_def_id']}\n"
-                f"  To find the correct ID: Wazuh Dashboard → Reporting → "
-                f"Report Definitions → Edit → copy ID from URL"
+                f"  To find the correct ID: Wazuh Dashboard -> Reporting -> "
+                f"Report Definitions -> Edit -> copy ID from URL"
             )
     except Exception as exc:
         logging.error(f"[{rid}] Unexpected error: {exc}", exc_info=True)
     return False
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+# -- CLI -----------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -250,7 +250,7 @@ def main() -> None:
     log_file = Path(log_cfg.get("log_file", "logs/report-runner.log"))
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Force UTF-8 on both handlers so Unicode log characters (✓ ✗ ── ⚠ →)
+    # Force UTF-8 on both handlers so Unicode log characters ([ok] [x] -- [!] ->)
     # don't crash on Windows consoles that default to cp1252.
     _stream_handler = logging.StreamHandler(sys.stdout)
     _stream_handler.stream = open(sys.stdout.fileno(), mode="w",
@@ -292,9 +292,9 @@ def main() -> None:
     ok   = [rid for rid, ok in results.items() if ok]
     fail = [rid for rid, ok in results.items() if not ok]
     logging.info(f"\n{'=' * 60}")
-    logging.info(f"Run complete — {len(ok)} succeeded, {len(fail)} failed")
-    for rid in ok:   logging.info(f"  ✓ {rid}")
-    for rid in fail: logging.error(f"  ✗ {rid}")
+    logging.info(f"Run complete -- {len(ok)} succeeded, {len(fail)} failed")
+    for rid in ok:   logging.info(f"  [ok] {rid}")
+    for rid in fail: logging.error(f"  [x] {rid}")
     sys.exit(0 if not fail else 1)
 
 

@@ -13,15 +13,15 @@ Report Scheduler, then downloads and emails them.
 
 API flow:
   1. GET  /api/reporting/reports
-         → list of all report instances (on-demand and scheduled)
+         -> list of all report instances (on-demand and scheduled)
 
   2. Filter by:
-       • report_name matches the configured report_name_match value
-       • trigger_type == "Schedule"   (excludes on-demand instances)
-       • time_created within check_window_minutes of now
+       * report_name matches the configured report_name_match value
+       * trigger_type == "Schedule"   (excludes on-demand instances)
+       * time_created within check_window_minutes of now
 
   3. GET  /api/reporting/generateReport/<instance_id>?timezone=...
-         → { "data": "...;base64,...", "filename": "..." }
+         -> { "data": "...;base64,...", "filename": "..." }
          (same endpoint as on-demand generation, but GET + instance _id)
 
   4. Decode base64, save file, email to recipients, write idempotency marker.
@@ -44,7 +44,7 @@ Usage
   python3 scripts/wazuh_scheduler_checker.py --all --dry-run
   python3 scripts/wazuh_scheduler_checker.py --all --config /etc/wazuh-reports/reports.conf.yaml
 
-Cron example — scheduled report at 06:00, checker runs at 06:15:
+Cron example -- scheduled report at 06:00, checker runs at 06:15:
   15 6 * * * cd /opt/wazuh-reports && \
              python3 scripts/wazuh_scheduler_checker.py \
              --report scheduled_daily_overview >> logs/cron.log 2>&1
@@ -86,7 +86,7 @@ OUTCOME_FAILED       = "failed"
 OUTCOME_ERROR        = "error"
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# -- Config --------------------------------------------------------------------
 
 def load_config(path: str) -> dict:
     with open(path) as f:
@@ -107,13 +107,13 @@ def resolve_recipients(report: dict, recipient_groups: dict) -> list[str]:
             emails.append(entry)
         else:
             logging.warning(
-                f"Unknown recipient entry '{entry}' in report '{report['id']}' — skipping."
+                f"Unknown recipient entry '{entry}' in report '{report['id']}' -- skipping."
             )
     seen: set = set()
     return [e for e in emails if not (e in seen or seen.add(e))]
 
 
-# ── Job queue filtering ───────────────────────────────────────────────────────
+# -- Job queue filtering -------------------------------------------------------
 
 def find_scheduled_instances(
     all_reports: list[dict],
@@ -125,9 +125,9 @@ def find_scheduled_instances(
     configured report name and were created within check_window_minutes.
 
     Matching logic:
-      • _source.report_definition.report_params.report_name == report_name_match
-      • _source.report_definition.trigger.trigger_type == "Schedule"
-      • _source.time_created (epoch ms) >= now - window_minutes
+      * _source.report_definition.report_params.report_name == report_name_match
+      * _source.report_definition.trigger.trigger_type == "Schedule"
+      * _source.time_created (epoch ms) >= now - window_minutes
 
     Returns matches sorted newest first. Callers use index [0] for the most
     recent instance within the window.
@@ -166,7 +166,7 @@ def find_scheduled_instances(
     return matches
 
 
-# ── Email ─────────────────────────────────────────────────────────────────────
+# -- Email ---------------------------------------------------------------------
 
 def render_template(template: str, report: dict, instance: dict | None = None) -> str:
     now = datetime.now()
@@ -210,7 +210,7 @@ def send_email(
     msg.attach(part)
 
     if dry_run:
-        logging.info(f"  [DRY-RUN] Would send '{subject}' → {recipients}")
+        logging.info(f"  [DRY-RUN] Would send '{subject}' -> {recipients}")
         return
 
     with smtplib.SMTP(smtp_cfg["host"], smtp_cfg["port"]) as server:
@@ -218,7 +218,7 @@ def send_email(
             server.starttls()
         server.login(smtp_cfg["username"], smtp_cfg["password"])
         server.sendmail(smtp_cfg["from_address"], recipients, msg.as_string())
-    logging.info(f"  ✓ Email sent: '{subject}' → {recipients}")
+    logging.info(f"  [ok] Email sent: '{subject}' -> {recipients}")
 
 
 def send_not_found_alert(
@@ -230,7 +230,7 @@ def send_not_found_alert(
 ) -> None:
     """Alert recipients that no scheduled instance was found in the window."""
     now = datetime.now()
-    subject = f"⚠ Wazuh Scheduled Report NOT FOUND: {report['label']} — {now.date().isoformat()}"
+    subject = f"[!] Wazuh Scheduled Report NOT FOUND: {report['label']} -- {now.date().isoformat()}"
     body = (
         f"WARNING: No scheduled report instance was found in the job queue.\n\n"
         f"Report       : {report['label']} ({report['id']})\n"
@@ -239,18 +239,18 @@ def send_not_found_alert(
         f"Search window: last {window_minutes} minutes\n"
         f"Checked at   : {now.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
         f"Possible causes:\n"
-        f"  • The OpenSearch Dashboards Report Scheduler did not run\n"
-        f"  • The report_name_match value does not match the Dashboard definition name\n"
-        f"    (must match exactly: Wazuh Dashboard → Reporting → Report Definitions → Name)\n"
-        f"  • check_window_minutes is too short — the report may have completed\n"
+        f"  * The OpenSearch Dashboards Report Scheduler did not run\n"
+        f"  * The report_name_match value does not match the Dashboard definition name\n"
+        f"    (must match exactly: Wazuh Dashboard -> Reporting -> Report Definitions -> Name)\n"
+        f"  * check_window_minutes is too short -- the report may have completed\n"
         f"    outside the search window; consider increasing it\n"
-        f"  • The Wazuh Dashboard service is unavailable\n\n"
-        f"Check: Wazuh Dashboard → Reporting → Reports (job queue)\n\n"
-        f"— Wazuh Report System"
+        f"  * The Wazuh Dashboard service is unavailable\n\n"
+        f"Check: Wazuh Dashboard -> Reporting -> Reports (job queue)\n\n"
+        f"-- Wazuh Report System"
     )
 
     if dry_run:
-        logging.info(f"  [DRY-RUN] Would send not-found alert → {recipients}")
+        logging.info(f"  [DRY-RUN] Would send not-found alert -> {recipients}")
         return
 
     msg = MIMEMultipart()
@@ -264,10 +264,10 @@ def send_not_found_alert(
             server.starttls()
         server.login(smtp_cfg["username"], smtp_cfg["password"])
         server.sendmail(smtp_cfg["from_address"], recipients, msg.as_string())
-    logging.warning(f"  ⚠ Not-found alert sent → {recipients}")
+    logging.warning(f"  [!] Not-found alert sent -> {recipients}")
 
 
-# ── Core checker ──────────────────────────────────────────────────────────────
+# -- Core checker --------------------------------------------------------------
 
 def check_scheduled_report(
     report: dict,
@@ -286,11 +286,11 @@ def check_scheduled_report(
     Flow:
       1. Filter all_report_instances for this report's name + "Schedule"
          trigger + within check_window_minutes
-      2. No match → send not-found alert → return "not_found"
-      3. Match found → check idempotency marker
-      4. Marker exists → skip (return "already_sent") unless --force
+      2. No match -> send not-found alert -> return "not_found"
+      3. Match found -> check idempotency marker
+      4. Marker exists -> skip (return "already_sent") unless --force
       5. Download via GET /api/reporting/generateReport/<instance_id>
-      6. Email → write marker → return "delivered"
+      6. Email -> write marker -> return "delivered"
     """
     rid = report["id"]
     smtp_cfg = cfg["smtp"]
@@ -298,13 +298,13 @@ def check_scheduled_report(
     window_minutes = report.get("check_window_minutes", 90)
     report_name_match = report.get("report_name_match", "")
 
-    logging.info(f"[{rid}] ── Checking: {report['label']} ({report.get('schedule_label', '')})")
+    logging.info(f"[{rid}] -- Checking: {report['label']} ({report.get('schedule_label', '')})")
     logging.info(f"[{rid}] Searching for name='{report_name_match}' "
                  f"trigger=Schedule within last {window_minutes} min")
 
     recipients = resolve_recipients(report, cfg.get("recipient_groups", {}))
     if not recipients:
-        logging.warning(f"[{rid}] No recipients resolved — skipping.")
+        logging.warning(f"[{rid}] No recipients resolved -- skipping.")
         return OUTCOME_ERROR
 
     try:
@@ -321,10 +321,10 @@ def check_scheduled_report(
                 all_report_instances, report_name_match, window_minutes
             )
 
-        # ── Not found ────────────────────────────────────────────────────────
+        # -- Not found --------------------------------------------------------
         if not instances:
             logging.warning(
-                f"[{rid}] ⚠ No scheduled instance found in the last {window_minutes} min."
+                f"[{rid}] [!] No scheduled instance found in the last {window_minutes} min."
             )
             send_not_found_alert(smtp_cfg, recipients, report, window_minutes, dry_run)
             return OUTCOME_NOT_FOUND
@@ -332,15 +332,15 @@ def check_scheduled_report(
         # Use the most recently created instance in the window
         instance = instances[0]
         logging.info(
-            f"[{rid}] ✓ Found instance {instance['instance_id']} "
+            f"[{rid}] [ok] Found instance {instance['instance_id']} "
             f"(created {instance['created_at'].strftime('%Y-%m-%d %H:%M:%S UTC')})"
         )
         if len(instances) > 1:
             logging.info(
-                f"[{rid}]   {len(instances) - 1} additional instance(s) in window — using newest."
+                f"[{rid}]   {len(instances) - 1} additional instance(s) in window -- using newest."
             )
 
-        # ── Idempotency ───────────────────────────────────────────────────────
+        # -- Idempotency -------------------------------------------------------
         marker = output_dir / f".sent_{rid}_{instance['instance_id']}"
         if marker.exists() and not force and not dry_run:
             logging.info(
@@ -348,19 +348,19 @@ def check_scheduled_report(
             )
             return OUTCOME_ALREADY_SENT
 
-        # ── Download ──────────────────────────────────────────────────────────
+        # -- Download ----------------------------------------------------------
         now = datetime.now()
         local_filename = f"{rid}_{now.strftime('%Y%m%d_%H%M%S')}.{report.get('format', 'xlsx')}"
         output_path = output_dir / local_filename
 
         if not dry_run:
             fmt = report.get("format", "xlsx")
-            logging.info(f"[{rid}] Downloading instance {instance['instance_id']} → {output_path} ({fmt})")
+            logging.info(f"[{rid}] Downloading instance {instance['instance_id']} -> {output_path} ({fmt})")
             api_filename = download_report_instance(
                 session, cfg["dashboard"], instance["instance_id"],
                 output_path, report_format=fmt
             )
-            logging.info(f"[{rid}] ✓ Saved ({api_filename})")
+            logging.info(f"[{rid}] [ok] Saved ({api_filename})")
 
             # Optional: convert XLSX/CSV to PDF before emailing
             if report.get("send_as_pdf") and fmt in ("xlsx", "csv"):
@@ -374,15 +374,15 @@ def check_scheduled_report(
                 )
                 output_path = pdf_path
                 api_filename = pdf_path.name
-                logging.info(f"[{rid}] ✓ Converted to PDF → {pdf_path.name}")
+                logging.info(f"[{rid}] [ok] Converted to PDF -> {pdf_path.name}")
         else:
             api_filename = f"{rid}_dry-run.xlsx"
             output_path = Path("/tmp/dry-run-placeholder.xlsx")
             output_path.touch()
 
-        # ── Email ─────────────────────────────────────────────────────────────
+        # -- Email -------------------------------------------------------------
         subject = render_template(
-            report.get("email_subject", "Wazuh Scheduled Report: {report_label} — {date}"),
+            report.get("email_subject", "Wazuh Scheduled Report: {report_label} -- {date}"),
             report, instance,
         )
         body = render_template(
@@ -392,7 +392,7 @@ def check_scheduled_report(
                 "Schedule     : {schedule_label}\n"
                 "Generated at : {generated_at}\n"
                 "Instance ID  : {instance_id}\n\n"
-                "— Wazuh Report System\n",
+                "-- Wazuh Report System\n",
             ),
             report, instance,
         )
@@ -400,13 +400,13 @@ def check_scheduled_report(
         send_email(smtp_cfg, recipients, subject, body, output_path,
                    attachment_name=api_filename, dry_run=dry_run)
 
-        # ── Marker ────────────────────────────────────────────────────────────
+        # -- Marker ------------------------------------------------------------
         if not dry_run:
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.touch()
             logging.debug(f"[{rid}] Marker written: {marker.name}")
 
-        logging.info(f"[{rid}] ✓ Done.")
+        logging.info(f"[{rid}] [ok] Done.")
         return OUTCOME_DELIVERED
 
     except requests.HTTPError as exc:
@@ -420,7 +420,7 @@ def check_scheduled_report(
         return OUTCOME_ERROR
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+# -- CLI -----------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -446,7 +446,7 @@ def main() -> None:
     log_file = Path(log_cfg.get("log_file", "logs/report-runner.log"))
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Force UTF-8 on both handlers so Unicode log characters (✓ ✗ ── ⚠ →)
+    # Force UTF-8 on both handlers so Unicode log characters ([ok] [x] -- [!] ->)
     # don't crash on Windows consoles that default to cp1252.
     _stream_handler = logging.StreamHandler(sys.stdout)
     _stream_handler.stream = open(sys.stdout.fileno(), mode="w",
@@ -491,7 +491,7 @@ def main() -> None:
 
     session = get_dashboard_session(cfg["dashboard"]) if not args.dry_run else requests.Session()
 
-    # Fetch the job queue once — reused for all report checks
+    # Fetch the job queue once -- reused for all report checks
     if not args.dry_run:
         logging.info("Fetching report job queue (GET /api/reporting/reports)...")
         all_instances = list_reports(session, cfg["dashboard"])
@@ -515,11 +515,11 @@ def main() -> None:
 
     logging.info(f"\n{'=' * 60}")
     logging.info("Scheduler check complete")
-    logging.info(f"  ✓ Delivered   : {results[OUTCOME_DELIVERED] or 'none'}")
-    logging.info(f"  ↩ Already sent: {results[OUTCOME_ALREADY_SENT] or 'none'}")
-    logging.info(f"  ⚠ Not found   : {results[OUTCOME_NOT_FOUND] or 'none'}")
-    logging.info(f"  ✗ Failed      : {results[OUTCOME_FAILED] or 'none'}")
-    logging.info(f"  ✗ Errors      : {results[OUTCOME_ERROR] or 'none'}")
+    logging.info(f"  [ok] Delivered   : {results[OUTCOME_DELIVERED] or 'none'}")
+    logging.info(f"  <- Already sent: {results[OUTCOME_ALREADY_SENT] or 'none'}")
+    logging.info(f"  [!] Not found   : {results[OUTCOME_NOT_FOUND] or 'none'}")
+    logging.info(f"  [x] Failed      : {results[OUTCOME_FAILED] or 'none'}")
+    logging.info(f"  [x] Errors      : {results[OUTCOME_ERROR] or 'none'}")
 
     if results[OUTCOME_NOT_FOUND] or results[OUTCOME_FAILED] or results[OUTCOME_ERROR]:
         sys.exit(1)
