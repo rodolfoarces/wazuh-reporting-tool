@@ -420,6 +420,175 @@ wazuh_scheduler_checker.py
 
 ---
 
+## Admin Web UI (`wazuh_gui2.py`)
+
+A browser-based configuration editor and report runner. Provides full access to
+edit the YAML configuration file and run on-demand reports, all from a single page.
+
+### Install
+
+```bash
+pip3 install flask pyyaml
+# or install everything at once:
+pip3 install -r requirements.txt
+```
+
+### Start
+
+```bash
+python3 scripts/wazuh_gui2.py
+```
+
+Then open `http://127.0.0.1:5000` in your browser.
+
+### Options
+
+| Option | Default | Description |
+|---|---|---|
+| `--host` | `127.0.0.1` | Bind address. Use `0.0.0.0` to reach from outside the VM |
+| `--port` | `5000` | Listening port |
+| `--config PATH` | `config/reports.conf.yaml` | Path to the YAML config file |
+| `--auth USER:PASS` | — | Enable HTTP Basic Auth (or set `WAZUH_GUI_AUTH`) |
+| `--ssl-cert PATH` | — | PEM certificate file to enable HTTPS (or set `WAZUH_GUI_SSL_CERT`) |
+| `--ssl-key PATH` | — | PEM private key file to enable HTTPS (or set `WAZUH_GUI_SSL_KEY`) |
+| `--debug` | off | Show full command lines and config file paths in the UI |
+
+Both `--ssl-cert` and `--ssl-key` must be provided together.
+
+### Examples
+
+```bash
+# Local only, no auth (default)
+python3 scripts/wazuh_gui2.py
+
+# Custom port
+python3 scripts/wazuh_gui2.py --port 8080
+
+# Expose to the network with authentication
+python3 scripts/wazuh_gui2.py --host 0.0.0.0 --auth admin:Sup3rS3cret!
+
+# HTTPS only (local)
+python3 scripts/wazuh_gui2.py \
+    --ssl-cert /etc/ssl/certs/gui.crt \
+    --ssl-key  /etc/ssl/private/gui.key
+
+# Expose with HTTPS and auth
+python3 scripts/wazuh_gui2.py \
+    --host 0.0.0.0 \
+    --auth admin:Sup3rS3cret! \
+    --ssl-cert /etc/ssl/certs/gui.crt \
+    --ssl-key  /etc/ssl/private/gui.key
+
+# Pass credentials via environment variable instead of the command line
+export WAZUH_GUI_AUTH="admin:Sup3rS3cret!"
+python3 scripts/wazuh_gui2.py --host 0.0.0.0
+
+# Debug mode — reveals config file paths and full runner commands in the UI
+python3 scripts/wazuh_gui2.py --debug
+```
+
+### UI sections
+
+| Tab | What it configures |
+|---|---|
+| **Connection** | Dashboard URL, credentials, SSL, timeout, timezone, CSV separator |
+| **SMTP / Email** | Mail server host, port, TLS, sender identity |
+| **Recipient groups** | Named address lists referenced by report definitions |
+| **Reports** | Add, edit, or remove on-demand and scheduled report definitions |
+| **Storage / Logging** | Output directory, file retention period, log level |
+| **▶ Run reports** | Trigger any on-demand report and watch live streamed output |
+
+> **Save before running.** Click **Save config** after any change — the runner
+> always reads from the saved YAML file.
+
+---
+
+## Run-only Web UI (`wazuh-gui.py`)
+
+A read-only interface for running reports on demand. It reads the existing YAML
+configuration but never modifies it. Intended for operators who need to trigger
+reports but should not have access to configuration or credentials.
+
+- Default port `5001` to avoid conflict with the admin UI
+- Uses its own separate credentials, independent of `wazuh_gui2.py`
+- Writes a server log to `logs/wazuh-run-gui.log`
+
+### Start
+
+```bash
+python3 scripts/wazuh-gui.py
+```
+
+Then open `http://127.0.0.1:5001` in your browser.
+
+### Options
+
+| Option | Default | Description |
+|---|---|---|
+| `--host` | `127.0.0.1` | Bind address |
+| `--port` | `5001` | Listening port |
+| `--config PATH` | `config/reports.conf.yaml` | Path to the YAML config file |
+| `--auth USER:PASS` | — | Enable HTTP Basic Auth (or set `WAZUH_RUN_GUI_AUTH`) |
+| `--auth-file PATH` | — | File containing `USER:PASS` on its first line |
+| `--ssl-cert PATH` | — | PEM certificate file to enable HTTPS (or set `WAZUH_RUN_GUI_SSL_CERT`) |
+| `--ssl-key PATH` | — | PEM private key file to enable HTTPS (or set `WAZUH_RUN_GUI_SSL_KEY`) |
+| `--debug` | off | Show full runner command lines in the UI; set log level to DEBUG |
+
+### Credential precedence
+
+When multiple sources are present, `--auth` wins over the environment variable,
+which wins over `--auth-file`:
+
+```
+--auth USER:PASS  >  WAZUH_RUN_GUI_AUTH  >  --auth-file PATH
+```
+
+### Examples
+
+```bash
+# Local only, no auth (default)
+python3 scripts/wazuh-gui.py
+
+# With authentication
+python3 scripts/wazuh-gui.py --auth operator:RunP@ss!
+
+# Credentials stored in a protected file instead of on the command line
+echo "operator:RunP@ss!" > /etc/wazuh-run-gui.auth
+chmod 600 /etc/wazuh-run-gui.auth
+python3 scripts/wazuh-gui.py --auth-file /etc/wazuh-run-gui.auth
+
+# Expose to the network with auth
+python3 scripts/wazuh-gui.py --host 0.0.0.0 --auth operator:RunP@ss!
+
+# Expose with HTTPS and auth
+python3 scripts/wazuh-gui.py \
+    --host 0.0.0.0 \
+    --auth operator:RunP@ss! \
+    --ssl-cert /etc/ssl/certs/gui.crt \
+    --ssl-key  /etc/ssl/private/gui.key
+
+# Different config file
+python3 scripts/wazuh-gui.py --config /opt/wazuh/reports.conf.yaml
+
+# Debug mode — shows full runner command in the UI and writes DEBUG-level log entries
+python3 scripts/wazuh-gui.py --debug
+
+# Run both UIs at the same time with separate credentials
+python3 scripts/wazuh_gui2.py --auth admin:AdminPass! &
+python3 scripts/wazuh-gui.py  --auth operator:RunP@ss! &
+```
+
+### Server log
+
+Activity is written to `logs/wazuh-run-gui.log` alongside the existing log files.
+The file name is set by the `LOG_FILE_NAME` variable at the top of the script — edit
+it there to redirect the log without changing the CLI. Each entry records:
+
+- Server startup parameters (config path, bind address, auth state, SSL state)
+- Every run request (report ID or ALL, dry-run flag, verbose flag)
+- Runner exit codes
+- Any errors encountered launching the runner process
+
 ---
 
 ## PDF conversion from XLSX / CSV
