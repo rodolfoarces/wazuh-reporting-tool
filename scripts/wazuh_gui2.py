@@ -149,7 +149,7 @@ def save_config(data):
         shutil.copy2(CONFIG_PATH, backup)
     payload = _mark_multiline(data)
     with open(CONFIG_PATH, "w") as f:
-        f.write("# Managed by wazuh_gui.py — edits made in the web UI are saved here.\n")
+        f.write("# Managed by wazuh_gui.py - edits made in the web UI are saved here.\n")
         f.write(f"# Last saved: {datetime.now().isoformat(timespec='seconds')}\n\n")
         yaml.dump(payload, f, default_flow_style=False, sort_keys=False,
                   allow_unicode=True, width=100)
@@ -193,7 +193,7 @@ def api_save_config():
         save_config(data)
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)}), 500
-    msg = f"Saved → {CONFIG_PATH}" if DEBUG else "Configuration saved successfully."
+    msg = f"Saved: {CONFIG_PATH}" if DEBUG else "Configuration saved successfully."
     return jsonify({"ok": True, "message": msg})
 
 
@@ -234,7 +234,7 @@ def api_run():
         cmd.append("--verbose")
 
     def generate():
-        yield _sse(("$ " + " ".join(cmd) if DEBUG else "Starting report execution…") + "\n\n")
+        yield _sse(("$ " + " ".join(cmd) if DEBUG else "Starting report execution...") + "\n\n")
         try:
             proc = subprocess.Popen(
                 cmd, cwd=str(PROJECT_ROOT),
@@ -272,7 +272,7 @@ PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Wazuh Reporting — Config & Runner</title>
+<title>Wazuh Reporting - Config & Runner</title>
 <style>
   :root{
     --bg:#0f1419; --panel:#1a2129; --panel2:#222b36; --line:#2d3947;
@@ -356,7 +356,7 @@ PAGE = r"""<!doctype html>
 <body>
 <header>
   <h1>Wazuh Reporting</h1>
-  <span id="statusBadge" class="badge">loading…</span>
+  <span id="statusBadge" class="badge">loading...</span>
   <span class="path" id="cfgPath"></span>
   <div class="spacer" style="flex:1"></div>
   <button class="btn ghost sm" onclick="reload()">Reload</button>
@@ -370,7 +370,7 @@ PAGE = r"""<!doctype html>
     <button data-tab="groups">Recipient groups</button>
     <button data-tab="reports">Reports</button>
     <button data-tab="advanced">Storage / Logging</button>
-    <button data-tab="run">▶ Run reports</button>
+    <button data-tab="run">Run reports</button>
   </nav>
 
   <main>
@@ -460,7 +460,7 @@ PAGE = r"""<!doctype html>
         enabled, non-scheduled reports appear here. <strong>Save your config first</strong> so the
         runner picks up your latest changes.</p>
       <div class="toolbar">
-        <button class="btn" onclick="runReport('', true)">▶ Run ALL enabled</button>
+        <button class="btn" onclick="runReport('', true)">Run ALL enabled</button>
         <label class="row-check" style="margin:0"><input type="checkbox" id="opt_dry">
           <span style="color:var(--txt)">Dry-run (no API call, no email)</span></label>
         <label class="row-check" style="margin:0"><input type="checkbox" id="opt_verbose">
@@ -556,7 +556,7 @@ function groupCard(name, emails){
 function emailRow(v){
   const r=document.createElement('div'); r.className='tag-row';
   r.innerHTML=`<input value="${esc(v)}" placeholder="user@example.com">
-    <button class="btn sm danger" onclick="this.closest('.tag-row').remove()">×</button>`;
+    <button class="btn sm danger" onclick="this.closest('.tag-row').remove()">x</button>`;
   return r;
 }
 function addGroup(){
@@ -576,7 +576,7 @@ function reportCard(r){
   const el=document.createElement('div'); el.className='report'; el.dataset.scheduled=sched;
   el.innerHTML=`
     <div class="report-head">
-      <span class="rid">${sched?'⏱ scheduled':'▶ on-demand'}</span>
+      <span class="rid">${sched?'[S] scheduled':'[D] on-demand'}</span>
       <input class="r-id" value="${esc(r.id||'')}" placeholder="unique_id" style="max-width:240px">
       <div class="spacer" style="flex:1"></div>
       <label class="row-check" style="margin:0"><input type="checkbox" class="r-enabled" ${r.enabled!==false?'checked':''}>
@@ -603,7 +603,7 @@ function reportCard(r){
         <input class="r-window" type="number" value="${esc(r.check_window_minutes??90)}"></div>
       <div class="field full"><label>schedule_label</label>
         <input class="r-schedlabel" value="${esc(r.schedule_label||'')}"></div>`:''}
-      <div class="field full"><label>Recipients (one per line — group name or raw email)</label>
+      <div class="field full"><label>Recipients (one per line - group name or raw email)</label>
         <textarea class="r-recipients">${esc((r.recipients||[]).join('\n'))}</textarea></div>
       <div class="field full"><label>Email subject (placeholders: {date} {month} {year} {report_label}${sched?' {schedule_label} {generated_at} {instance_id}':''})</label>
         <input class="r-subject" value="${esc(r.email_subject||'')}"></div>
@@ -687,8 +687,8 @@ async function refreshRunList(){
     el.innerHTML=`<div class="meta"><div class="lbl">${esc(rp.label)}
         <span class="pill ${rp.enabled?'':'off'}">${rp.enabled?rp.format:'disabled'}</span></div>
       <div class="sub">${esc(rp.id)}</div></div>
-      ${rp.send_as_pdf?'<span class="pill" style="color:var(--accent);border-color:var(--accent);font-size:10px">→ PDF</span>':''}
-      <button class="btn sm" ${rp.enabled?'':'disabled'} onclick="runReport('${esc(rp.id)}',false)">▶ Run</button>`;
+      ${rp.send_as_pdf?'<span class="pill" style="color:var(--accent);border-color:var(--accent);font-size:10px">PDF</span>':''}
+      <button class="btn sm" ${rp.enabled?'':'disabled'} onclick="runReport('${esc(rp.id)}',false)">Run</button>`;
     wrap.appendChild(el);
   });
 }
@@ -696,9 +696,9 @@ function clearConsole(){document.getElementById('console').innerHTML='Idle.';}
 function appendLine(line){
   const c=document.getElementById('console');
   let cls='';
-  if(/\[ERROR\]|ERROR|✗|Traceback/.test(line)) cls='e';
-  else if(/\[WARNING\]|WARN|⚠/.test(line)) cls='w';
-  else if(/✓|succeeded|Done\./.test(line)) cls='ok';
+  if(/\[ERROR\]|ERROR|FAILED|Traceback/.test(line)) cls='e';
+  else if(/\[WARNING\]|WARN/.test(line)) cls='w';
+  else if(/succeeded|Done\./.test(line)) cls='ok';
   else if(line.startsWith('$ ')) cls='cmd';
   const span=document.createElement('span'); if(cls) span.className=cls;
   span.textContent=line+'\n'; c.appendChild(span); c.scrollTop=c.scrollHeight;
@@ -706,7 +706,7 @@ function appendLine(line){
 function runReport(id, all){
   if(evtSource){evtSource.close(); evtSource=null;}
   const c=document.getElementById('console'); c.innerHTML='';
-  const st=document.getElementById('runStatus'); st.textContent='running…'; st.className='badge example';
+  const st=document.getElementById('runStatus'); st.textContent='running...'; st.className='badge example';
   const q=new URLSearchParams();
   if(all) q.set('all','1'); else q.set('id',id);
   if(isChk('opt_dry')) q.set('dry_run','1');
@@ -715,7 +715,7 @@ function runReport(id, all){
   evtSource.onmessage=(e)=>{
     if(e.data.startsWith('__DONE__:')){
       const rc=e.data.split(':')[1];
-      st.textContent=rc==='0'?'completed ✓':'exit '+rc; st.className='badge '+(rc==='0'?'live':'example');
+      st.textContent=rc==='0'?'completed':'exit '+rc; st.className='badge '+(rc==='0'?'live':'example');
       evtSource.close(); evtSource=null; return;
     }
     appendLine(e.data);
@@ -735,7 +735,7 @@ reload();
 
 def main():
     global CONFIG_PATH, AUTH_USER, AUTH_PASS, DEBUG
-    ap = argparse.ArgumentParser(description="Wazuh reporting — local config & run GUI")
+    ap = argparse.ArgumentParser(description="Wazuh reporting - local config & run GUI")
     ap.add_argument("--host", default="127.0.0.1",
                     help="Bind address. Use 0.0.0.0 to reach it from outside the VM.")
     ap.add_argument("--port", type=int, default=5000)

@@ -60,7 +60,7 @@ EXAMPLE_CONFIG = CONFIG_DIR / "reports.conf.example.yaml"
 RUNNER         = SCRIPT_DIR / "wazuh_report_runner.py"
 LOGS_DIR       = PROJECT_ROOT / "logs"
 
-# Log file written to LOGS_DIR — change this variable to redirect the server log.
+# Log file written to LOGS_DIR - change this variable to redirect the server log.
 LOG_FILE_NAME = "wazuh-run-gui.log"
 
 # Overridden by --config at startup.
@@ -69,7 +69,7 @@ CONFIG_PATH = LIVE_CONFIG
 # Set to True by --debug.
 DEBUG = False
 
-# Auth credentials — set at startup.
+# Auth credentials - set at startup.
 AUTH_USER = None
 AUTH_PASS = None
 
@@ -105,7 +105,7 @@ def _require_auth():
           and hmac.compare_digest(a.password, AUTH_PASS))
     if not ok:
         return Response("Authentication required.", 401,
-                        {"WWW-Authenticate": 'Basic realm="Wazuh Reporting — Run"'})
+                        {"WWW-Authenticate": 'Basic realm="Wazuh Reporting - Run"'})
     return None
 
 
@@ -174,7 +174,7 @@ def api_run():
     logging.info("Run requested: %s  dry_run=%s  verbose=%s", label, dry_run, verbose)
 
     def generate():
-        yield _sse(("$ " + " ".join(cmd) if DEBUG else "Starting report execution…") + "\n\n")
+        yield _sse(("$ " + " ".join(cmd) if DEBUG else "Starting report execution...") + "\n\n")
         try:
             proc = subprocess.Popen(
                 cmd, cwd=str(PROJECT_ROOT),
@@ -213,7 +213,7 @@ PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Wazuh Reporting — Run</title>
+<title>Wazuh Reporting - Run</title>
 <style>
   :root{
     --bg:#0f1419; --panel:#1a2129; --panel2:#222b36; --line:#2d3947;
@@ -262,8 +262,8 @@ PAGE = r"""<!doctype html>
 </head>
 <body>
 <header>
-  <h1>Wazuh Reporting — Run</h1>
-  <span id="statusBadge" class="badge">loading…</span>
+  <h1>Wazuh Reporting - Run</h1>
+  <span id="statusBadge" class="badge">loading...</span>
 </header>
 
 <main>
@@ -272,7 +272,7 @@ PAGE = r"""<!doctype html>
     Only enabled, non-scheduled reports appear here.</p>
 
   <div class="toolbar">
-    <button class="btn" onclick="runReport('', true)">▶ Run ALL enabled</button>
+    <button class="btn" onclick="runReport('', true)">Run ALL enabled</button>
     <label class="row-check"><input type="checkbox" id="opt_dry">
       <span style="color:var(--txt)">Dry-run (no API call, no email)</span></label>
     <label class="row-check"><input type="checkbox" id="opt_verbose">
@@ -316,9 +316,9 @@ async function loadReports(){
         </div>
         <div class="sub">${esc(rp.id)}</div>
       </div>
-      ${rp.send_as_pdf?'<span class="pill" style="color:var(--accent);border-color:var(--accent);font-size:10px">→ PDF</span>':''}
+      ${rp.send_as_pdf?'<span class="pill" style="color:var(--accent);border-color:var(--accent);font-size:10px">PDF</span>':''}
       <button class="btn sm" ${rp.enabled?'':'disabled'}
-        onclick="runReport('${esc(rp.id)}',false)">▶ Run</button>`;
+        onclick="runReport('${esc(rp.id)}',false)">Run</button>`;
     wrap.appendChild(el);
   });
 }
@@ -333,9 +333,9 @@ function clearConsole(){ document.getElementById('console').innerHTML='Idle.'; }
 function appendLine(line){
   const c=document.getElementById('console');
   let cls='';
-  if(/\[ERROR\]|ERROR|✗|Traceback/.test(line)) cls='e';
-  else if(/\[WARNING\]|WARN|⚠/.test(line))     cls='w';
-  else if(/✓|succeeded|Done\./.test(line))     cls='ok';
+  if(/\[ERROR\]|ERROR|FAILED|Traceback/.test(line)) cls='e';
+  else if(/\[WARNING\]|WARN/.test(line))            cls='w';
+  else if(/succeeded|Done\./.test(line))            cls='ok';
   else if(line.startsWith('$ '))               cls='cmd';
   const span=document.createElement('span'); if(cls) span.className=cls;
   span.textContent=line+'\n'; c.appendChild(span); c.scrollTop=c.scrollHeight;
@@ -345,7 +345,7 @@ function runReport(id, all){
   if(evtSource){ evtSource.close(); evtSource=null; }
   document.getElementById('console').innerHTML='';
   const st=document.getElementById('runStatus');
-  st.textContent='running…'; st.className='badge example';
+  st.textContent='running...'; st.className='badge example';
 
   const q=new URLSearchParams();
   if(all) q.set('all','1'); else q.set('id',id);
@@ -356,7 +356,7 @@ function runReport(id, all){
   evtSource.onmessage=e=>{
     if(e.data.startsWith('__DONE__:')){
       const rc=e.data.split(':')[1];
-      st.textContent=rc==='0'?'completed ✓':'exit '+rc;
+      st.textContent=rc==='0'?'completed':'exit '+rc;
       st.className='badge '+(rc==='0'?'live':'example');
       evtSource.close(); evtSource=null; return;
     }
@@ -383,7 +383,7 @@ loadReports();
 
 def main():
     global CONFIG_PATH, AUTH_USER, AUTH_PASS, DEBUG
-    ap = argparse.ArgumentParser(description="Wazuh reporting — run-only GUI")
+    ap = argparse.ArgumentParser(description="Wazuh reporting - run-only GUI")
     ap.add_argument("--host", default="127.0.0.1",
                     help="Bind address. Use 0.0.0.0 to reach from outside the VM.")
     ap.add_argument("--port", type=int, default=5001,
@@ -437,7 +437,7 @@ def main():
 
     print("Wazuh Reporting Run GUI")
     print(f"  config file  : {CONFIG_PATH}"
-          f"{'  (not found — check path)' if not CONFIG_PATH.exists() else ''}")
+          f"{'  (not found - check path)' if not CONFIG_PATH.exists() else ''}")
     print(f"  runner       : {RUNNER}{'  [NOT FOUND]' if not RUNNER.exists() else ''}")
     print(f"  bind         : {args.host}:{args.port}")
     print(f"  basic auth   : {'ON (user: ' + AUTH_USER + ')' if AUTH_USER else 'OFF'}")
