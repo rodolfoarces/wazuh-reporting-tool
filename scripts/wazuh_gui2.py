@@ -22,10 +22,15 @@ wazuh_report_runner.py) and run:
 Then open http://127.0.0.1:5000 in your browser.
 
 Options:
-    --host 127.0.0.1     Bind address (use 0.0.0.0 to reach it from outside a VM)
-    --port 5000          Port (default: 5000)
-    --config PATH        Config file (default: <repo>/config/reports.conf.yaml)
-    --auth USER:PASS     Enable HTTP Basic Auth (or set WAZUH_GUI_AUTH env var)
+    --host 127.0.0.1       Bind address (use 0.0.0.0 to reach it from outside a VM)
+    --port 5000            Port (default: 5000)
+    --config PATH          Config file (default: <repo>/config/reports.conf.yaml)
+    --auth USER:PASS       Enable HTTP Basic Auth (or set WAZUH_GUI_AUTH env var)
+    --ssl-cert PATH        PEM certificate file to enable HTTPS (or set WAZUH_GUI_SSL_CERT)
+    --ssl-key  PATH        PEM private key file to enable HTTPS (or set WAZUH_GUI_SSL_KEY)
+
+Both --ssl-cert and --ssl-key must be provided together to activate HTTPS.
+When active the server listens on https:// instead of http://.
 
 SECURITY NOTE: this UI exposes and edits credentials in the config file.
 Keep the default 127.0.0.1 bind so it is reachable only from this machine.
@@ -66,6 +71,9 @@ RUNNER = SCRIPT_DIR / "wazuh_report_runner.py"
 
 # Overridden by --config at startup.
 CONFIG_PATH = LIVE_CONFIG
+
+# Set to True by --debug; controls how much detail is exposed in the UI.
+DEBUG = False
 
 # Optional HTTP Basic Auth, set at startup from --auth or WAZUH_GUI_AUTH ("user:pass").
 # When set, every request must supply matching credentials. Recommended whenever the
@@ -185,7 +193,8 @@ def api_save_config():
         save_config(data)
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)}), 500
-    return jsonify({"ok": True, "config_path": str(CONFIG_PATH)})
+    msg = f"Saved → {CONFIG_PATH}" if DEBUG else "Configuration saved successfully."
+    return jsonify({"ok": True, "message": msg})
 
 
 @app.get("/api/reports")
@@ -225,7 +234,7 @@ def api_run():
         cmd.append("--verbose")
 
     def generate():
-        yield _sse("$ " + " ".join(cmd) + "\n\n")
+        yield _sse(("$ " + " ".join(cmd) if DEBUG else "Starting report execution…") + "\n\n")
         try:
             proc = subprocess.Popen(
                 cmd, cwd=str(PROJECT_ROOT),
@@ -664,7 +673,7 @@ async function saveAll(){
   const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(c)});
   const j=await r.json();
-  if(j.ok){CFG=c; toast('Saved → '+j.config_path,'ok'); reload();}
+  if(j.ok){CFG=c; toast(j.message,'ok'); reload();}
   else toast('Save failed: '+(j.error||'unknown'),'err');
 }
 
@@ -725,7 +734,7 @@ reload();
 
 
 def main():
-    global CONFIG_PATH, AUTH_USER, AUTH_PASS
+    global CONFIG_PATH, AUTH_USER, AUTH_PASS, DEBUG
     ap = argparse.ArgumentParser(description="Wazuh reporting — local config & run GUI")
     ap.add_argument("--host", default="127.0.0.1",
                     help="Bind address. Use 0.0.0.0 to reach it from outside the VM.")
@@ -735,16 +744,28 @@ def main():
     ap.add_argument("--auth", metavar="USER:PASS",
                     help="Enable HTTP Basic Auth (or set WAZUH_GUI_AUTH env var). "
                          "Strongly recommended when --host is not 127.0.0.1.")
+    ap.add_argument("--ssl-cert", metavar="PATH",
+                    help="PEM certificate file to enable HTTPS (or set WAZUH_GUI_SSL_CERT).")
+    ap.add_argument("--ssl-key", metavar="PATH",
+                    help="PEM private key file to enable HTTPS (or set WAZUH_GUI_SSL_KEY).")
     ap.add_argument("--debug", action="store_true")
     args = ap.parse_args()
 
     CONFIG_PATH = Path(args.config).resolve()
+    DEBUG = args.debug
 
     auth = args.auth or os.environ.get("WAZUH_GUI_AUTH")
     if auth:
         if ":" not in auth:
             sys.exit("--auth must be in the form USER:PASS")
         AUTH_USER, AUTH_PASS = auth.split(":", 1)
+
+    ssl_cert = getattr(args, "ssl_cert", None) or os.environ.get("WAZUH_GUI_SSL_CERT")
+    ssl_key  = getattr(args, "ssl_key",  None) or os.environ.get("WAZUH_GUI_SSL_KEY")
+    if bool(ssl_cert) != bool(ssl_key):
+        sys.exit("Both --ssl-cert and --ssl-key must be provided together to enable HTTPS.")
+    ssl_context = (ssl_cert, ssl_key) if ssl_cert else None
+    scheme = "https" if ssl_context else "http"
 
     exposed = args.host not in ("127.0.0.1", "localhost")
 
@@ -755,17 +776,19 @@ def main():
     print(f"  runner       : {RUNNER}{'  [NOT FOUND]' if not RUNNER.exists() else ''}")
     print(f"  bind         : {args.host}:{args.port}")
     print(f"  basic auth   : {'ON (user: ' + AUTH_USER + ')' if AUTH_USER else 'OFF'}")
+    print(f"  SSL/HTTPS    : {'ON (cert: ' + ssl_cert + ')' if ssl_context else 'OFF'}")
     if exposed and not AUTH_USER:
         print("\n  WARNING: bound to a network interface with NO authentication.")
         print("    This page exposes dashboard & SMTP passwords. Add --auth USER:PASS")
         print("    or restrict access with a firewall / reverse proxy.")
     if exposed:
-        print(f"\n  From outside the VM, open  http://<VM-IP>:{args.port}")
+        print(f"\n  From outside the VM, open  {scheme}://<VM-IP>:{args.port}")
     else:
-        print(f"\n  Open  http://{args.host}:{args.port}  in your browser.")
+        print(f"\n  Open  {scheme}://{args.host}:{args.port}  in your browser.")
     print("  Ctrl+C to stop.\n")
 
-    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
+    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True,
+            ssl_context=ssl_context)
 
 
 if __name__ == "__main__":
